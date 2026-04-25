@@ -24,16 +24,10 @@ if [ -z "$1" ]; then
 fi
 
 YOUTUBE_URL="$1"
-# DOWNLOAD_DIR="downloads" # این خط را کامنت یا حذف کن
-
-# Create download directory if it doesn't exist - yt-dlp will create it if needed.
-# mkdir -p "$DOWNLOAD_DIR" # این خط را کامنت یا حذف کن
 
 echo "📥 در حال دانلود ویدیو از ${YOUTUBE_URL}..."
 
 # yt-dlp command to download the best quality video and audio, merge if necessary, and save with a clean filename
-# Using --parse-metadata "%(title)s" to ensure we get the title correctly for filename
-# Using --sub-langs "en.*,fa.*" to prioritize English and Farsi subtitles if available
 # Using --embed-thumbnail to embed thumbnail
 # Using --add-metadata to add metadata
 # Using --output to specify the download path and filename format
@@ -44,7 +38,6 @@ yt-dlp --force-overwrites --ffmpeg-location "$(command -v ffmpeg)" \
        --add-metadata \
        --write-thumbnail \
        --sub-langs "en.*,fa.*" \
-       --parse-metadata "%(title)s" \
        "${YOUTUBE_URL}"
 
 echo "✅ ویدیو با موفقیت دانلود شد."
