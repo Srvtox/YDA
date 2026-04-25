@@ -71,8 +71,6 @@ jobs:
 
           sleep 5
           sudo warp-cli status
-          echo "--- Current IP ---"
-          curl -s https://ipinfo.io
 
       # -------------------------
       # AUTO QUALITY DETECTOR
