@@ -8,6 +8,19 @@ on:
         required: true
         type: string
 
+      quality:
+        description: "Select video quality"
+        required: true
+        default: "best"
+        type: choice
+        options:
+          - best
+          - 1080p
+          - 720p
+          - 480p
+          - 360p
+          - audio
+
 jobs:
   download:
     runs-on: ubuntu-latest
@@ -44,56 +57,57 @@ jobs:
           sudo apt-get install -y cloudflare-warp
 
       # -------------------------
-      # CONNECT WARP (RETRY SAFE)
+      # CONNECT WARP
       # -------------------------
-      - name: Connect WARP Safely
+      - name: Connect WARP
         id: warp
         continue-on-error: true
         run: |
-          echo "Starting warp-svc..."
           sudo systemctl start warp-svc || true
           sleep 5
 
-          echo "Creating registration..."
           sudo warp-cli --accept-tos registration new || true
+          sudo warp-cli --accept-tos connect || true
 
-          echo "Attempting WARP connection..."
-          for i in 1 2 3; do
-            echo "Try #$i"
-            sudo warp-cli --accept-tos connect || true
-            sleep 6
-            STATUS=$(sudo warp-cli status)
-            echo "$STATUS"
-            if echo "$STATUS" | grep -qi "Connected"; then
-              echo "✅ WARP connected"
-              echo "warp_ok=true" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          done
+          STATUS=$(sudo warp-cli status)
+          echo "$STATUS"
 
-          echo "❌ WARP failed after 3 attempts"
-          echo "warp_ok=false" >> $GITHUB_OUTPUT
+          if echo "$STATUS" | grep -qi "Connected"; then
+            echo "warp_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "warp_ok=false" >> $GITHUB_OUTPUT
+          fi
 
       # -------------------------
-      # SHOW IP INFO
+      # SELECT FORMAT
       # -------------------------
-      - name: Show IP info
+      - name: Select Download Format
+        id: format
         run: |
-          echo "Current public IP info:"
-          curl -s https://ipinfo.io || true
+          QUALITY="${{ github.event.inputs.quality }}"
+
+          if [ "$QUALITY" = "best" ]; then
+            FORMAT="bv*+ba/b"
+          elif [ "$QUALITY" = "1080p" ]; then
+            FORMAT="bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+          elif [ "$QUALITY" = "720p" ]; then
+            FORMAT="bestvideo[height<=720]+bestaudio/best[height<=720]"
+          elif [ "$QUALITY" = "480p" ]; then
+            FORMAT="bestvideo[height<=480]+bestaudio/best[height<=480]"
+          elif [ "$QUALITY" = "360p" ]; then
+            FORMAT="bestvideo[height<=360]+bestaudio/best[height<=360]"
+          elif [ "$QUALITY" = "audio" ]; then
+            FORMAT="bestaudio"
+          fi
+
+          echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
       # -------------------------
-      # DOWNLOAD WITH SMART MODE
+      # DOWNLOAD VIDEO
       # -------------------------
       - name: Download Video
         run: |
           mkdir -p downloads
-
-          if [ "${{ steps.warp.outputs.warp_ok }}" == "true" ]; then
-            echo "Downloading through WARP..."
-          else
-            echo "⚠ Downloading WITHOUT WARP (fallback mode)"
-          fi
 
           yt-dlp \
             --js-runtimes node \
@@ -101,7 +115,7 @@ jobs:
             --sleep-requests 2 \
             --concurrent-fragments 1 \
             --retries 10 \
-            -f "bv*+ba/b" \
+            -f "${{ steps.format.outputs.format }}" \
             "${{ github.event.inputs.youtube_url }}" \
             -o "downloads/%(title)s.%(ext)s"
 
