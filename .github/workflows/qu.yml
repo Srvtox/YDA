@@ -102,4 +102,3 @@ jobs:
           git commit -m "Add YouTube formats log for ${{ github.event.inputs.youtube_url }}" || echo "No changes to commit."
 
           git push
-`
