@@ -55,10 +55,10 @@ jobs:
         run: |
           cd output
           cat << 'EOF' > join.sh
-#!/bin/bash
-cat *.part.* > merged_file
-echo "File pieces merged into: merged_file"
-EOF
+          #!/bin/bash
+          cat *.part.* > merged_file
+          echo "File pieces merged into: merged_file"
+          EOF
           chmod +x join.sh
 
       - name: Commit & Push
