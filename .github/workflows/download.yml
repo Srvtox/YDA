@@ -20,20 +20,54 @@ jobs:
         with:
           python-version: '3.x' # Or specify a specific version like '3.10'
 
-      - name: Install yt-dlp and dependencies
+      - name: Install yt-dlp, ffmpeg, and deno
         run: |
           python3 -m pip install -U yt-dlp
           # Install ffmpeg
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
-          # Install deno for JS runtime (recommended by yt-dlp)
-          curl -fsSL https://deno.land/install.sh | DENO_INSTALL_ROOT=~/.local sh
-          echo 'export PATH="$HOME/.local/bin:$PATH"' >> $GITHUB_ENV
+          # Install deno for JS runtime
+          curl -fsSL https://deno.land/install.sh | DENO_INSTALL_ROOT=~/.deno sh
+          # Add deno to PATH
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
       - name: Verify installations
         run: |
           echo "yt-dlp version:"
           yt-dlp --version
+          echo "ffmpeg version:"
+          ffmpeg -version
+          echo "deno version:"
+          deno --version # This should now work
+
+      - name: Make script executable
+        run: chmod +x ./download.sh
+
+      - name: Run YouTube download script
+        run: |
+          # Assuming download.sh is in the root directory and takes URL as the first argument
+          ./download.sh "${{ github.event.inputs.youtube_url }}"
+        env:
+          # Ensure yt-dlp and other scripts in ~/.local/bin (if any) are found.
+          # We are now managing deno separately via $GITHUB_PATH.
+          PATH: ${{ env.PATH }}:/home/runner/.local/bin
+
+      - name: Commit and push downloaded video
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Ensure the downloads directory exists before trying to add it
+          if [ -d "downloads" ]; then
+            git add downloads/
+            if ! git diff --staged --quiet; then
+              git commit -m "Add downloaded video"
+              git push
+            else
+              echo "No new videos to commit."
+            fi
+          else
+            echo "Downloads directory not found. Nothing to commit."
+          fi
           echo "ffmpeg version:"
           ffmpeg -version
           echo "deno version:"
