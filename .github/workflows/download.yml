@@ -43,61 +43,41 @@ jobs:
           sudo apt-get install -y ffmpeg curl gnupg lsb-release jq
           python -m pip install -U yt-dlp
 
-      # -------------------------
-      # INSTALL WARP
-      # -------------------------
-      - name: Install Cloudflare WARP
+      # ==============================
+      # INSTALL WARP (WORKING VERSION)
+      # ==============================
+      - name: Install Cloudflare WARP (Legacy)
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+          sudo apt-get remove -y cloudflare-warp || true
+          wget https://pkg.cloudflareclient.com/pool/jammy/main/c/cloudflare-warp/cloudflare-warp_2023.8.70-1_amd64.deb
+          sudo dpkg -i cloudflare-warp_2023.8.70-1_amd64.deb
 
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-          sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
-
-      # -------------------------
-      # CONNECT WARP (BEST EFFORT)
-      # -------------------------
+      # ==============================
+      # CONNECT WARP
+      # ==============================
       - name: Connect WARP
         id: warp
         continue-on-error: true
         run: |
-          echo "Reloading systemd..."
-          sudo systemctl daemon-reload || true
-          
-          echo "Enabling WARP service..."
-          sudo systemctl enable warp-svc || true
-
-          echo "Starting WARP service..."
-          sudo systemctl restart warp-svc || true
-
-          echo "Checking service status..."
-          sudo systemctl status warp-svc || true
-
-          echo "Registering..."
           sudo warp-cli --accept-tos registration new || true
-
-          echo "Connecting..."
           sudo warp-cli --accept-tos connect || true
-
           sleep 5
 
           echo "--- warp-cli status ---"
-          if sudo warp-cli status; then
+          sudo warp-cli status || true
+
+          echo "--- IP INFO ---"
+          curl -s https://ipinfo.io
+
+          if sudo warp-cli status | grep -q "Connected"; then
             echo "warp_ok=true" >> $GITHUB_OUTPUT
           else
             echo "warp_ok=false" >> $GITHUB_OUTPUT
           fi
 
-          echo "--- Public IP ---"
-          curl -s https://ipinfo.io || true
-
-
-      # -------------------------
-      # AUTO QUALITY DETECTOR
-      # -------------------------
+      # ==============================
+      # AUTO FORMAT DETECTOR
+      # ==============================
       - name: Detect Best Format
         id: detect
         run: |
@@ -109,20 +89,19 @@ jobs:
             exit 0
           fi
 
-          echo "Fetching metadata..."
           yt-dlp -J "$URL" > info.json
 
           FORMAT=$(jq -r \
           --argjson max "$MAX" '
-          .formats
-          | map(select(.vcodec!="none"))
-          | map(select(.height <= $max))
-          | sort_by(.height)
-          | reverse
-          | .[0].format_id' info.json)
+            .formats
+            | map(select(.vcodec!="none"))
+            | map(select(.height <= $max))
+            | sort_by(.height)
+            | reverse
+            | .[0].format_id
+          ' info.json)
 
           if [ "$FORMAT" = "null" ]; then
-            # Fallback: best video + best audio or best progressive
             FORMAT="bv*+ba/b"
           else
             FORMAT="$FORMAT+ba/b"
@@ -131,14 +110,12 @@ jobs:
           echo "Chosen format: $FORMAT"
           echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
-      # -------------------------
-      # DOWNLOAD
-      # -------------------------
+      # ==============================
+      # DOWNLOAD VIDEO
+      # ==============================
       - name: Download Video
         run: |
           mkdir -p downloads
-
-          echo "WARP status from previous step: ${{ steps.warp.outputs.warp_ok }}"
 
           yt-dlp \
             --js-runtimes node \
@@ -152,9 +129,9 @@ jobs:
 
           ls -lh downloads
 
-      # -------------------------
-      # FILE SIZE
-      # -------------------------
+      # ==============================
+      # DETECT FILE SIZE
+      # ==============================
       - name: Detect File Size
         id: size
         run: |
@@ -164,9 +141,9 @@ jobs:
           echo "file=$FILE" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
-      # -------------------------
-      # SMALL → REPO
-      # -------------------------
+      # ==============================
+      # SMALL FILE → REPO
+      # ==============================
       - name: Upload Small File
         if: steps.size.outputs.size < 50000000
         run: |
@@ -179,9 +156,9 @@ jobs:
           git commit -m "Add downloaded video"
           git push
 
-      # -------------------------
-      # MEDIUM → RELEASE
-      # -------------------------
+      # ==============================
+      # MEDIUM FILE → RELEASE
+      # ==============================
       - name: Upload Medium File
         if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
         uses: softprops/action-gh-release@v2
@@ -191,9 +168,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # -------------------------
-      # LARGE → ARTIFACT
-      # -------------------------
+      # ==============================
+      # LARGE FILE → ARTIFACT
+      # ==============================
       - name: Upload Large File
         if: steps.size.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
