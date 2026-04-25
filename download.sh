@@ -1,49 +1,101 @@
 #!/bin/bash
 set -e
 
-URL="$1"
-VIDEO_ID=$(echo "$URL" | sed 's/.*v=//;s/&.*//')
+INPUT="$1"
+mkdir -p downloads
 
-API="https://api.poketube.fun/api/v1/videos/$VIDEO_ID"
+# اگر لینک یوتیوب نبود → دانلود فایل مستقیم
+if [[ "$INPUT" != *"youtube.com"* && "$INPUT" != *"youtu.be"* ]]; then
+    echo "📦 Direct file URL detected."
 
-echo "📥 Video ID = $VIDEO_ID"
-echo "🌐 Fetching metadata from Poketube API..."
+    FILENAME=$(basename "$INPUT")
+    echo "⬇️ Downloading: $FILENAME"
 
-JSON=$(curl -4 -s --max-time 15 "$API")
+    curl -L --retry 3 --progress-bar "$INPUT" -o "downloads/$FILENAME"
+    echo "🎉 Saved to downloads/$FILENAME"
+    exit 0
+fi
 
-if [ -z "$JSON" ]; then
-    echo "❌ Empty response from Poketube API."
+
+##############################################
+#              YouTube MODE
+##############################################
+
+VIDEO_ID=$(echo "$INPUT" | sed 's/.*v=//;s/&.*//')
+echo "🎥 YouTube detected — VIDEO ID = $VIDEO_ID"
+
+# چند API برای Failover
+APIS=(
+    "https://api.poketube.fun/api/v1/videos/$VIDEO_ID"
+    "https://tube.kavin.rocks/api/v1/videos/$VIDEO_ID"
+    "https://ytapi.net/api/info?videoId=$VIDEO_ID"
+)
+
+JSON=""
+WORKING_API=""
+
+echo "🌐 Testing YouTube mirrors..."
+
+for API in "${APIS[@]}"; do
+    echo "➡️ Trying: $API"
+
+    # دیباگ فعال: شامل header و status code
+    RESPONSE=$(curl -4 -s -D headers.txt --max-time 15 "$API" -o body.txt || true)
+
+    # اگر body خالی باشد → رد کن
+    if [[ ! -s body.txt ]]; then
+        echo "❌ Empty body from $API"
+        continue
+    fi
+
+    # تست JSON بودن
+    if jq empty body.txt 2>/dev/null; then
+        JSON=$(cat body.txt)
+        WORKING_API="$API"
+        echo "✅ Valid JSON from: $API"
+        break
+    else
+        echo "⚠️ Not JSON from $API"
+        head -c 200 body.txt
+        echo
+    fi
+done
+
+# اگر هیچ API جواب نداد
+if [[ -z "$JSON" ]]; then
+    echo "❌ ALL MIRRORS FAILED"
+    echo "📄 Debug Headers:"
+    cat headers.txt
+    echo
+    echo "📄 Body preview:"
+    head -c 500 body.txt
     exit 1
 fi
 
-# Validate JSON
-echo "$JSON" | jq empty 2>/dev/null || {
-    echo "❌ Invalid JSON:"
-    echo "$JSON" | head -c 200
-    exit 1
-}
 
-echo "✅ JSON received."
+##############################################
+#       استخراج اطلاعات و دانلود ویدیو
+##############################################
 
-TITLE=$(echo "$JSON" | jq -r '.title' | sed 's/[\/:*?"<>|]/-/g')
+TITLE=$(echo "$JSON" | jq -r '.title // .videoDetails.title')
+TITLE=$(echo "$TITLE" | sed 's/[\/:*?"<>|]/-/g')
 
-# Pick best mp4 video stream
 STREAM_URL=$(echo "$JSON" | jq -r '
-    .streams
-    | map(select(.mimeType | contains("video") and contains("mp4")))
-    | sort_by(.quality | tonumber)
+    .streams // .formats // []
+    | map(select(.mimeType // .type | contains("mp4")))
+    | sort_by(.quality // .qualityLabel // "0" | sub("p";"") | tonumber)
     | reverse
     | .[0].url
 ')
 
-if [ -z "$STREAM_URL" ] || [ "$STREAM_URL" = "null" ]; then
+if [[ -z "$STREAM_URL" || "$STREAM_URL" == "null" ]]; then
     echo "❌ No mp4 streams found."
+    echo "🔍 JSON structure:"
+    echo "$JSON" | head -c 500
     exit 1
 fi
 
-mkdir -p downloads
+echo "⬇️ Downloading video: $TITLE"
+curl -L --retry 3 "$STREAM_URL" -o "downloads/${TITLE}.mp4"
 
-echo "⬇️ Downloading best mp4 stream..."
-curl -L --retry 3 --retry-delay 2 "$STREAM_URL" -o "downloads/${TITLE}.mp4"
-
-echo "🎉 Download complete: downloads/${TITLE}.mp4"
+echo "🎉 Done: downloads/${TITLE}.mp4"
