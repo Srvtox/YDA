@@ -7,11 +7,9 @@ VIDEO_ID=$(echo "$URL" | sed 's/.*v=//;s/&.*//')
 echo "📥 Video ID = $VIDEO_ID"
 
 MIRRORS=(
-    "https://piped.video"
-    "https://pipedapi.adminforge.de"
-    "https://pipedapi.esmailelbob.xyz"
-    "https://pipedapi-libre.kavin.rocks"
-    "https://pipedapi.leptons.xyz"
+    "https://pipedapi.coldwire.xyz"
+    "https://pipedapi.cdnfrom.net"
+    "https://pipedapi.smnz.de"
 )
 
 STREAM_JSON=""
@@ -21,36 +19,34 @@ echo "🔍 Checking mirrors..."
 for API in "${MIRRORS[@]}"; do
     echo "🌐 Testing: $API"
 
-    # Save raw output for debugging
-    RAW=$(curl -s --max-time 6 "$API/streams/$VIDEO_ID" || true)
+    RAW=$(curl -4 -s --max-time 6 "$API/streams/$VIDEO_ID" || true)
 
     if [ -z "$RAW" ]; then
         echo "⚠️ Empty response."
         continue
     fi
 
-    # Print first 200 chars of response
-    echo "📄 RAW RESPONSE (first 200 chars):"
-    echo "$RAW" | head -c 200
-    echo ""
-    echo ""
-
-    # Try detecting JSON
     if echo "$RAW" | jq empty 2>/dev/null; then
         echo "✅ Valid JSON from $API"
         STREAM_JSON="$RAW"
         break
     else
-        echo "❌ Not valid JSON from $API"
+        echo "❌ Not valid JSON: $(echo "$RAW" | head -c 80)"
     fi
 done
 
 if [ -z "$STREAM_JSON" ]; then
-    echo "❌ No valid JSON from any Piped mirror."
+    echo "❌ No valid JSON from any mirror."
     exit 1
 fi
 
-# Now extract video URL
 VIDEO_URL=$(echo "$STREAM_JSON" | jq -r '.videoStreams | max_by(.quality) | .url')
 
-echo "⬇️ Video URL: $VIDEO_URL"
+TITLE=$(echo "$STREAM_JSON" | jq -r '.title' | sed 's/[\/:*?"<>|]/-/g')
+
+mkdir -p downloads
+
+echo "⬇️ Downloading…"
+curl -L "$VIDEO_URL" -o "downloads/${TITLE}.mp4"
+
+echo "🎉 Done: downloads/${TITLE}.mp4"
