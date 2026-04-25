@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader (WARP FULL PRO)
+name: Smart YouTube Downloader (WARP AUTO QUALITY)
 
 on:
   workflow_dispatch:
@@ -8,17 +8,18 @@ on:
         required: true
         type: string
 
-      quality:
-        description: "Select video quality"
+      max_quality:
+        description: "Maximum quality allowed"
         required: true
-        default: "best"
+        default: "1080"
         type: choice
         options:
-          - best
-          - 1080p
-          - 720p
-          - 480p
-          - 360p
+          - 2160
+          - 1440
+          - 1080
+          - 720
+          - 480
+          - 360
           - audio
 
 jobs:
@@ -39,7 +40,7 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl gnupg lsb-release
+          sudo apt-get install -y ffmpeg curl gnupg lsb-release jq
           python -m pip install -U yt-dlp
 
       # -------------------------
@@ -48,10 +49,10 @@ jobs:
       - name: Install Cloudflare WARP
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+          | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
 
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
@@ -60,8 +61,6 @@ jobs:
       # CONNECT WARP
       # -------------------------
       - name: Connect WARP
-        id: warp
-        continue-on-error: true
         run: |
           sudo systemctl start warp-svc || true
           sleep 5
@@ -69,41 +68,47 @@ jobs:
           sudo warp-cli --accept-tos registration new || true
           sudo warp-cli --accept-tos connect || true
 
-          STATUS=$(sudo warp-cli status)
-          echo "$STATUS"
-
-          if echo "$STATUS" | grep -qi "Connected"; then
-            echo "warp_ok=true" >> $GITHUB_OUTPUT
-          else
-            echo "warp_ok=false" >> $GITHUB_OUTPUT
-          fi
+          sleep 5
+          sudo warp-cli status
+          curl -s https://ipinfo.io
 
       # -------------------------
-      # SELECT FORMAT
+      # AUTO QUALITY DETECTOR
       # -------------------------
-      - name: Select Download Format
-        id: format
+      - name: Detect Best Format
+        id: detect
         run: |
-          QUALITY="${{ github.event.inputs.quality }}"
 
-          if [ "$QUALITY" = "best" ]; then
-            FORMAT="bv*+ba/b"
-          elif [ "$QUALITY" = "1080p" ]; then
-            FORMAT="bestvideo[height<=1080]+bestaudio/best[height<=1080]"
-          elif [ "$QUALITY" = "720p" ]; then
-            FORMAT="bestvideo[height<=720]+bestaudio/best[height<=720]"
-          elif [ "$QUALITY" = "480p" ]; then
-            FORMAT="bestvideo[height<=480]+bestaudio/best[height<=480]"
-          elif [ "$QUALITY" = "360p" ]; then
-            FORMAT="bestvideo[height<=360]+bestaudio/best[height<=360]"
-          elif [ "$QUALITY" = "audio" ]; then
-            FORMAT="bestaudio"
+          URL="${{ github.event.inputs.youtube_url }}"
+          MAX="${{ github.event.inputs.max_quality }}"
+
+          if [ "$MAX" = "audio" ]; then
+            echo "format=ba" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
+          yt-dlp -J "$URL" > info.json
+
+          FORMAT=$(jq -r \
+          --argjson max "$MAX" '
+          .formats
+          | map(select(.vcodec!="none"))
+          | map(select(.height <= $max))
+          | sort_by(.height)
+          | reverse
+          | .[0].format_id' info.json)
+
+          if [ "$FORMAT" = "null" ]; then
+            FORMAT="bv*+ba/b"
+          else
+            FORMAT="$FORMAT+ba/b"
+          fi
+
+          echo "Chosen format: $FORMAT"
           echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
       # -------------------------
-      # DOWNLOAD VIDEO
+      # DOWNLOAD
       # -------------------------
       - name: Download Video
         run: |
@@ -115,14 +120,14 @@ jobs:
             --sleep-requests 2 \
             --concurrent-fragments 1 \
             --retries 10 \
-            -f "${{ steps.format.outputs.format }}" \
+            -f "${{ steps.detect.outputs.format }}" \
             "${{ github.event.inputs.youtube_url }}" \
             -o "downloads/%(title)s.%(ext)s"
 
           ls -lh downloads
 
       # -------------------------
-      # SIZE DETECTION
+      # FILE SIZE
       # -------------------------
       - name: Detect File Size
         id: size
@@ -136,7 +141,7 @@ jobs:
       # -------------------------
       # SMALL → REPO
       # -------------------------
-      - name: Upload Small File (<50MB)
+      - name: Upload Small File
         if: steps.size.outputs.size < 50000000
         run: |
           mkdir -p videos
@@ -151,7 +156,7 @@ jobs:
       # -------------------------
       # MEDIUM → RELEASE
       # -------------------------
-      - name: Upload Medium File (50MB–2GB)
+      - name: Upload Medium File
         if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
         uses: softprops/action-gh-release@v2
         with:
@@ -163,7 +168,7 @@ jobs:
       # -------------------------
       # LARGE → ARTIFACT
       # -------------------------
-      - name: Upload Large File (>2GB)
+      - name: Upload Large File
         if: steps.size.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
         with:
