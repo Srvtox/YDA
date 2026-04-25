@@ -21,6 +21,12 @@ jobs:
         with:
           python-version: "3.x"
 
+      # ✅ اضافه شد
+      - name: Install NodeJS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install dependencies
         run: |
           python -m pip install -U yt-dlp
@@ -30,7 +36,10 @@ jobs:
       - name: Download video
         run: |
           mkdir downloads
-          yt-dlp "${{ github.event.inputs.youtube_url }}" -o "downloads/%(title)s.%(ext)s"
+          yt-dlp \
+            --js-runtimes node \
+            "${{ github.event.inputs.youtube_url }}" \
+            -o "downloads/%(title)s.%(ext)s"
           ls -lh downloads
 
       - name: Detect file size
