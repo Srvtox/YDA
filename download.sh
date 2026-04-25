@@ -4,49 +4,46 @@ set -e
 URL="$1"
 VIDEO_ID=$(echo "$URL" | sed 's/.*v=//;s/&.*//')
 
+API="https://api.poketube.fun/api/v1/videos/$VIDEO_ID"
+
 echo "📥 Video ID = $VIDEO_ID"
+echo "🌐 Fetching metadata from Poketube API..."
 
-MIRRORS=(
-    "https://pipedapi.coldwire.xyz"
-    "https://pipedapi.cdnfrom.net"
-    "https://pipedapi.smnz.de"
-)
+JSON=$(curl -4 -s --max-time 15 "$API")
 
-STREAM_JSON=""
-
-echo "🔍 Checking mirrors..."
-
-for API in "${MIRRORS[@]}"; do
-    echo "🌐 Testing: $API"
-
-    RAW=$(curl -4 -s --max-time 6 "$API/streams/$VIDEO_ID" || true)
-
-    if [ -z "$RAW" ]; then
-        echo "⚠️ Empty response."
-        continue
-    fi
-
-    if echo "$RAW" | jq empty 2>/dev/null; then
-        echo "✅ Valid JSON from $API"
-        STREAM_JSON="$RAW"
-        break
-    else
-        echo "❌ Not valid JSON: $(echo "$RAW" | head -c 80)"
-    fi
-done
-
-if [ -z "$STREAM_JSON" ]; then
-    echo "❌ No valid JSON from any mirror."
+if [ -z "$JSON" ]; then
+    echo "❌ Empty response from Poketube API."
     exit 1
 fi
 
-VIDEO_URL=$(echo "$STREAM_JSON" | jq -r '.videoStreams | max_by(.quality) | .url')
+# Validate JSON
+echo "$JSON" | jq empty 2>/dev/null || {
+    echo "❌ Invalid JSON:"
+    echo "$JSON" | head -c 200
+    exit 1
+}
 
-TITLE=$(echo "$STREAM_JSON" | jq -r '.title' | sed 's/[\/:*?"<>|]/-/g')
+echo "✅ JSON received."
+
+TITLE=$(echo "$JSON" | jq -r '.title' | sed 's/[\/:*?"<>|]/-/g')
+
+# Pick best mp4 video stream
+STREAM_URL=$(echo "$JSON" | jq -r '
+    .streams
+    | map(select(.mimeType | contains("video") and contains("mp4")))
+    | sort_by(.quality | tonumber)
+    | reverse
+    | .[0].url
+')
+
+if [ -z "$STREAM_URL" ] || [ "$STREAM_URL" = "null" ]; then
+    echo "❌ No mp4 streams found."
+    exit 1
+fi
 
 mkdir -p downloads
 
-echo "⬇️ Downloading…"
-curl -L "$VIDEO_URL" -o "downloads/${TITLE}.mp4"
+echo "⬇️ Downloading best mp4 stream..."
+curl -L --retry 3 --retry-delay 2 "$STREAM_URL" -o "downloads/${TITLE}.mp4"
 
-echo "🎉 Done: downloads/${TITLE}.mp4"
+echo "🎉 Download complete: downloads/${TITLE}.mp4"
