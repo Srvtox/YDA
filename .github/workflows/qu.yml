@@ -1,4 +1,4 @@
-name: YouTube Quality Inspector (WARP FULL COMMIT)
+name: 🔥 Ultimate YouTube Inspector (WARP + JS + Multi Client)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0     # برای اینکه بتوانیم push کنیم
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -25,18 +25,18 @@ jobs:
         with:
           node-version: "20"
 
-      # -------------------------------
-      # Install yt-dlp + deps
-      # -------------------------------
+      # ----------------------------------
+      # Install Dependencies
+      # ----------------------------------
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl gnupg lsb-release
+          sudo apt-get install -y ffmpeg curl gnupg lsb-release jq
           python -m pip install -U yt-dlp
 
-      # -------------------------------
+      # ----------------------------------
       # Install Cloudflare WARP
-      # -------------------------------
+      # ----------------------------------
       - name: Install WARP
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
@@ -48,57 +48,94 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
 
-      # -------------------------------
-      # Connect WARP
-      # -------------------------------
       - name: Connect WARP
         continue-on-error: true
         run: |
-          echo "------ BEFORE WARP ------"
+          echo "====== BEFORE WARP ======"
           curl -s https://ipinfo.io
-          echo "-------------------------"
+          echo "========================="
 
           sudo systemctl enable warp-svc || true
           sudo systemctl start warp-svc || true
-          sleep 4
+          sleep 5
 
           sudo warp-cli --accept-tos registration new || true
           sudo warp-cli --accept-tos set-mode warp || true
           sudo warp-cli --accept-tos connect || true
 
-          sleep 6
+          sleep 8
           sudo warp-cli status || true
 
-          echo "------ AFTER WARP ------"
+          echo "====== AFTER WARP ======"
           curl -s https://ipinfo.io
-          echo "------------------------"
+          echo "========================"
 
-      # -------------------------------
-      # Inspect available formats
-      # -------------------------------
-      - name: Show Available Formats
+      # ----------------------------------
+      # Force yt-dlp to use NodeJS
+      # ----------------------------------
+      - name: Ensure NodeJS JS Runtime
         run: |
-          echo "Formats for: ${{ github.event.inputs.youtube_url }}" > formats.txt
-          echo "" >> formats.txt
+          echo "Node location:"
+          which node
+          node -v
+          export PATH="$(dirname $(which node)):$PATH"
 
-          yt-dlp \
-            -v \
-            --ignore-errors \
-            --extractor-args "youtube:player_client=android,web_safari,mweb" \
-            -F "${{ github.event.inputs.youtube_url }}" \
-            2>&1 | tee -a formats.txt
+          echo "Testing JS runtime visibility..."
+          yt-dlp --version
 
-      # -------------------------------
-      # Commit & Push formats.txt
-      # -------------------------------
-      - name: Commit & Push Formats
+      # ----------------------------------
+      # Create logs directory
+      # ----------------------------------
+      - name: Prepare Log Folder
+        run: |
+          mkdir -p logs
+          VIDEO_ID=$(yt-dlp --get-id "${{ github.event.inputs.youtube_url }}")
+          echo "VIDEO_ID=$VIDEO_ID" >> $GITHUB_ENV
+
+      # ----------------------------------
+      # Multi Client Inspection
+      # ----------------------------------
+      - name: Inspect with Multiple Clients
+        run: |
+          URL="${{ github.event.inputs.youtube_url }}"
+          VID="${VIDEO_ID}"
+
+          CLIENTS=("web" "android" "web_safari" "mweb" "tvhtml5" "ios")
+
+          for CLIENT in "${CLIENTS[@]}"
+          do
+            echo "========= CLIENT: $CLIENT ========="
+
+            yt-dlp \
+              -v \
+              --ignore-errors \
+              --extractor-args "youtube:player_client=$CLIENT" \
+              -F "$URL" \
+              2>&1 | tee "logs/${VID}_${CLIENT}_formats.txt"
+
+            echo ""
+            echo "Saving JSON manifest for $CLIENT"
+
+            yt-dlp \
+              -v \
+              --ignore-errors \
+              --extractor-args "youtube:player_client=$CLIENT" \
+              -J "$URL" \
+              > "logs/${VID}_${CLIENT}_manifest.json"
+
+            echo "===================================="
+          done
+
+      # ----------------------------------
+      # Commit Everything
+      # ----------------------------------
+      - name: Commit & Push Logs
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "github-actions[bot]@usersply.github.com"
 
-          git add formats.txt
+          git add logs/
 
-          # اگر هیچ تغییری نبود ارور نده
-          git commit -m "Add YouTube formats log for ${{ github.event.inputs.youtube_url }}" || echo "No changes to commit."
+          git commit -m "YouTube Inspect Logs for ${{ github.event.inputs.youtube_url }}" || echo "No changes."
 
           git push
