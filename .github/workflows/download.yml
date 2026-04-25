@@ -34,7 +34,7 @@ jobs:
             ffmpeg -version
           else
             echo "ffmpeg command not found after installation attempt."
-            exit 1 # Exit if ffmpeg is not found, as it's critical
+            exit 1
           fi
 
           echo "--- Installing deno ---"
@@ -46,7 +46,6 @@ jobs:
             deno --version
           else
             echo "deno command not found after installation attempt."
-            # We don't exit here for deno, as it's less critical than ffmpeg for this specific error
           fi
 
       - name: Make script executable
@@ -55,23 +54,5 @@ jobs:
       - name: Run YouTube download script
         run: |
           echo "Running download script..."
-          # Pass the URL to the script
+          export PATH="/usr/bin:/usr/local/bin:$PATH"   # اضافه کردن ffmpeg و yt-dlp
           ./download.sh "${{ github.event.inputs.youtube_url }}"
-        env:
-          PATH: ${{ env.PATH }}:/home/runner/.local/bin # Ensure yt-dlp is found
-
-      - name: Commit and push downloaded video
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -d "downloads" ]; then
-            git add downloads/
-            if ! git diff --staged --quiet; then
-              git commit -m "Add downloaded video"
-              git push
-            else
-              echo "No new videos to commit."
-            fi
-          else
-            echo "Downloads directory not found. Nothing to commit."
-          fi
