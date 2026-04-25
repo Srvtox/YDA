@@ -1,73 +1,81 @@
-name: Download & Split Upload
+name: YouTube Downloader Workflow
 
 on:
   workflow_dispatch:
     inputs:
       youtube_url:
-        description: "YouTube video URL"
+        description: 'YouTube video URL to download'
         required: true
         type: string
 
 jobs:
-  build:
+  download:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          lfs: true
 
-      - name: Install tools (yt-dlp, split tools)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install yt-dlp + ffmpeg
         run: |
-          sudo apt update
-          sudo apt install -y yt-dlp
+          python3 -m pip install -U yt-dlp
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
 
-      - name: Download video
+      - name: Run YouTube Downloader
         run: |
-          mkdir -p output
-          yt-dlp "${{ github.event.inputs.youtube_url }}" -o "output/video.%(ext)s"
+          mkdir -p downloads
+          yt-dlp "${{ github.event.inputs.youtube_url }}" -o "downloads/%(title)s.%(ext)s"
+          
+          echo "Downloaded files:"
+          ls -lh downloads/
 
-      - name: Detect downloaded file name
-        id: findfile
+      - name: Setup Git LFS
         run: |
-          FILE=$(ls output)
-          echo "file_name=$FILE" >> $GITHUB_OUTPUT
+          git lfs install
 
-      - name: Check size & split
+      - name: Move downloaded files into repo
         run: |
-          cd output
-          FILE="${{ steps.findfile.outputs.file_name }}"
-          SIZE=$(stat -c%s "$FILE")
+          mkdir -p videos
+          mv downloads/* videos/
 
-          echo "File size: $SIZE bytes"
+      - name: Auto-detect large files and track with LFS
+        run: |
+          cd videos
 
-          # اگر بالای 100MB بود split می‌کند
-          if [ "$SIZE" -gt 100000000 ]; then
-            echo "Splitting file into 95MB chunks..."
-            split -b 95M "$FILE" "${FILE}.part."
-            rm "$FILE"
+          # find files > 100MB
+          LARGE_FILES=$(find . -type f -size +100M)
+
+          if [ ! -z "$LARGE_FILES" ]; then
+            echo "Large files found:"
+            echo "$LARGE_FILES"
+            git lfs track "*.mp4"
+            git lfs track "*.mkv"
+            git add .gitattributes
           else
-            echo "File below 100MB, no split needed."
+            echo "No files large enough for LFS."
           fi
 
-      - name: Create join script
-        run: |
-          cd output
-          cat << 'EOF' > join.sh
-          #!/bin/bash
-          cat *.part.* > merged_file
-          echo "File pieces merged into: merged_file"
-          EOF
-          chmod +x join.sh
-
-      - name: Commit & Push
+      - name: Commit & Push results
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          git add videos/
+          
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
 
-          git add output
-          git commit -m "Added split video parts"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git commit -m "Add downloaded YouTube video"
           git push
