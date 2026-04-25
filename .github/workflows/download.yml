@@ -49,27 +49,29 @@ jobs:
       - name: Install Cloudflare WARP
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-          | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
 
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-          | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
 
       # -------------------------
-      # CONNECT WARP
+      # CONNECT WARP (NEW METHOD)
       # -------------------------
       - name: Connect WARP
         run: |
-          sudo systemctl start warp-svc || true
-          sleep 5
-
+          # No systemctl service in new versions
+          echo "Registering WARP..."
           sudo warp-cli --accept-tos registration new || true
+
+          echo "Connecting WARP..."
           sudo warp-cli --accept-tos connect || true
 
           sleep 5
           sudo warp-cli status
+          echo "--- Current IP ---"
           curl -s https://ipinfo.io
 
       # -------------------------
@@ -87,6 +89,7 @@ jobs:
             exit 0
           fi
 
+          echo "Fetching metadata..."
           yt-dlp -J "$URL" > info.json
 
           FORMAT=$(jq -r \
@@ -174,3 +177,4 @@ jobs:
         with:
           name: downloaded-video
           path: downloads/
+`
