@@ -1,3 +1,0 @@
-code.deb filter=lfs diff=lfs merge=lfs -text
-chr.deb filter=lfs diff=lfs merge=lfs -text
-cpp.vsix filter=lfs diff=lfs merge=lfs -text
