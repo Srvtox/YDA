@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader (WARP Enabled)
+name: Smart YouTube Downloader (WARP FULL PRO)
 
 on:
   workflow_dispatch:
@@ -13,28 +13,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - name: Install NodeJS
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install yt-dlp, ffmpeg, curl
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg curl gnupg lsb-release
           python -m pip install -U yt-dlp
 
+      # -------------------------
+      # INSTALL WARP
+      # -------------------------
       - name: Install Cloudflare WARP
         run: |
-          echo "Installing WARP..."
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
             | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
 
@@ -44,41 +43,57 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
 
-      - name: Connect WARP
-        id: warpstatus
+      # -------------------------
+      # CONNECT WARP (RETRY SAFE)
+      # -------------------------
+      - name: Connect WARP Safely
+        id: warp
+        continue-on-error: true
         run: |
-          echo "Creating WARP registration..."
-          sudo warp-cli --accept-tos registration new
+          echo "Starting warp-svc..."
+          sudo systemctl start warp-svc || true
+          sleep 5
 
-          echo "Connecting WARP..."
-          sudo warp-cli --accept-tos connect
+          echo "Creating registration..."
+          sudo warp-cli --accept-tos registration new || true
 
-          echo "Waiting for WARP tunnel to initialize..."
-          sleep 8
+          echo "Attempting WARP connection..."
+          for i in 1 2 3; do
+            echo "Try #$i"
+            sudo warp-cli --accept-tos connect || true
+            sleep 6
+            STATUS=$(sudo warp-cli status)
+            echo "$STATUS"
+            if echo "$STATUS" | grep -qi "Connected"; then
+              echo "✅ WARP connected"
+              echo "warp_ok=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
 
-          echo "Checking WARP IP..."
-          IP=$(curl -s https://ipinfo.io)
-          echo "$IP"
+          echo "❌ WARP failed after 3 attempts"
+          echo "warp_ok=false" >> $GITHUB_OUTPUT
 
-          # detect WARP by checking org field from ipinfo
-          if echo "$IP" | grep -qi "Cloudflare"; then
-            echo "warp_connected=true" >> $GITHUB_OUTPUT
-            echo "WARP is ACTIVE!"
-          else
-            echo "warp_connected=false" >> $GITHUB_OUTPUT
-            echo "WARP FAILED!"
-          fi
-
-
-      - name: Abort if WARP is NOT active
-        if: steps.warpstatus.outputs.warp_connected == 'false'
+      # -------------------------
+      # SHOW IP INFO
+      # -------------------------
+      - name: Show IP info
         run: |
-          echo "❌ ERROR: WARP did NOT connect. Aborting download for safety."
-          exit 1
+          echo "Current public IP info:"
+          curl -s https://ipinfo.io || true
 
-      - name: Download video (through WARP)
+      # -------------------------
+      # DOWNLOAD WITH SMART MODE
+      # -------------------------
+      - name: Download Video
         run: |
           mkdir -p downloads
+
+          if [ "${{ steps.warp.outputs.warp_ok }}" == "true" ]; then
+            echo "Downloading through WARP..."
+          else
+            echo "⚠ Downloading WITHOUT WARP (fallback mode)"
+          fi
 
           yt-dlp \
             --js-runtimes node \
@@ -90,11 +105,13 @@ jobs:
             "${{ github.event.inputs.youtube_url }}" \
             -o "downloads/%(title)s.%(ext)s"
 
-          echo "✔ Download complete"
           ls -lh downloads
 
-      - name: Detect file size
-        id: filesize
+      # -------------------------
+      # SIZE DETECTION
+      # -------------------------
+      - name: Detect File Size
+        id: size
         run: |
           FILE=$(ls downloads | head -n1)
           SIZE=$(stat -c%s "downloads/$FILE")
@@ -102,21 +119,26 @@ jobs:
           echo "file=$FILE" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
-      - name: Upload small file to repo
-        if: steps.filesize.outputs.size < 50000000
+      # -------------------------
+      # SMALL → REPO
+      # -------------------------
+      - name: Upload Small File (<50MB)
+        if: steps.size.outputs.size < 50000000
         run: |
           mkdir -p videos
           mv downloads/* videos/
 
           git config user.name github-actions
           git config user.email github-actions@github.com
-
           git add videos
           git commit -m "Add downloaded video"
           git push
 
-      - name: Upload medium file to Release
-        if: steps.filesize.outputs.size >= 50000000 && steps.filesize.outputs.size < 2000000000
+      # -------------------------
+      # MEDIUM → RELEASE
+      # -------------------------
+      - name: Upload Medium File (50MB–2GB)
+        if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
         uses: softprops/action-gh-release@v2
         with:
           tag_name: video-${{ github.run_number }}
@@ -124,8 +146,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload large file as artifact
-        if: steps.filesize.outputs.size >= 2000000000
+      # -------------------------
+      # LARGE → ARTIFACT
+      # -------------------------
+      - name: Upload Large File (>2GB)
+        if: steps.size.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
         with:
           name: downloaded-video
