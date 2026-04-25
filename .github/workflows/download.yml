@@ -1,10 +1,10 @@
-name: YouTube Downloader Workflow
+name: Smart YouTube Downloader
 
 on:
   workflow_dispatch:
     inputs:
       youtube_url:
-        description: 'YouTube video URL to download'
+        description: "YouTube video URL"
         required: true
         type: string
 
@@ -13,70 +13,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
-      - name: Install yt-dlp + ffmpeg
+      - name: Install dependencies
         run: |
-          python3 -m pip install -U yt-dlp
-          sudo apt-get update -y
+          python -m pip install -U yt-dlp
+          sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Run YouTube Downloader
+      - name: Download video
         run: |
-          mkdir -p downloads
+          mkdir downloads
           yt-dlp "${{ github.event.inputs.youtube_url }}" -o "downloads/%(title)s.%(ext)s"
-          
-          echo "Downloaded files:"
-          ls -lh downloads/
+          ls -lh downloads
 
-      - name: Setup Git LFS
+      - name: Detect file size
+        id: filesize
         run: |
-          git lfs install
+          FILE=$(ls downloads | head -n1)
+          SIZE=$(stat -c%s "downloads/$FILE")
+          echo "file=$FILE" >> $GITHUB_OUTPUT
+          echo "size=$SIZE" >> $GITHUB_OUTPUT
 
-      - name: Move downloaded files into repo
+      - name: Upload small file to repo
+        if: steps.filesize.outputs.size < 50000000
         run: |
           mkdir -p videos
           mv downloads/* videos/
 
-      - name: Auto-detect large files and track with LFS
-        run: |
-          cd videos
+          git config user.name github-actions
+          git config user.email github-actions@github.com
 
-          # find files > 100MB
-          LARGE_FILES=$(find . -type f -size +100M)
+          git add videos
+          git commit -m "Add downloaded video"
+          git push
 
-          if [ ! -z "$LARGE_FILES" ]; then
-            echo "Large files found:"
-            echo "$LARGE_FILES"
-            git lfs track "*.mp4"
-            git lfs track "*.mkv"
-            git lfs track "*.webm"
-            git add .gitattributes
-          else
-            echo "No files large enough for LFS."
-          fi
-
-      - name: Commit & Push results
+      - name: Upload medium file to Release
+        if: steps.filesize.outputs.size >= 50000000 && steps.filesize.outputs.size < 2000000000
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: video-${{ github.run_number }}
+          files: downloads/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git add videos/
-          
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-            exit 0
-          fi
 
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git commit -m "Add downloaded YouTube video"
-          git push
+      - name: Upload large file as artifact
+        if: steps.filesize.outputs.size >= 2000000000
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-video
+          path: downloads/
