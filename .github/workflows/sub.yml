@@ -1,0 +1,120 @@
+name: YouTube Subtitle Downloader (ONLY SUBS + WARP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "YouTube video URL"
+        required: true
+        type: string
+
+      sub_languages:
+        description: "Subtitle languages (comma separated, e.g. en,fa)"
+        required: false
+        default: "en,fa"
+        type: string
+
+jobs:
+  download_subtitles:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Setup NodeJS (Enable JS Runtime)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg gnupg curl lsb-release
+          python -m pip install -U yt-dlp
+
+      # -------------------------------------------
+      # INSTALL & CONNECT WARP (2023.8.70)
+      # -------------------------------------------
+      - name: Install Cloudflare WARP
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+
+      - name: Connect WARP
+        continue-on-error: true
+        run: |
+          sudo warp-cli --accept-tos registration new || true
+          sudo warp-cli --accept-tos connect || true
+          sleep 6
+          sudo warp-cli status || true
+          curl -s https://ipinfo.io
+
+      # -------------------------------------------
+      # DOWNLOAD SUBTITLES ONLY
+      # -------------------------------------------
+      - name: Download Subtitles
+        run: |
+          mkdir -p subtitles
+
+          URL="${{ github.event.inputs.youtube_url }}"
+          SUBLANG="${{ github.event.inputs.sub_languages }}"
+
+          echo "Trying with TVHTML5 client first..."
+
+          yt-dlp \
+            --skip-download \
+            --js-runtimes "node:$(which node)" \
+            --extractor-args "youtube:player_client=tvhtml5" \
+            --write-subs \
+            --write-auto-subs \
+            --sub-lang "$SUBLANG" \
+            --convert-subs srt \
+            "$URL" \
+            -o "subtitles/%(title)s.%(ext)s" \
+            || FALLBACK=true
+
+          if [ "$FALLBACK" = "true" ]; then
+            echo "TVHTML5 failed… switching to ANDROID client."
+            yt-dlp \
+              --skip-download \
+              --js-runtimes "node:$(which node)" \
+              --extractor-args "youtube:player_client=android" \
+              --write-subs \
+              --write-auto-subs \
+              --sub-lang "$SUBLANG" \
+              --convert-subs srt \
+              "$URL" \
+              -o "subtitles/%(title)s.%(ext)s"
+          fi
+
+      - name: List Downloaded Files
+        run: ls -Rlh subtitles
+
+      # -------------------------------------------
+      # COMMIT SUBS TO REPO
+      # -------------------------------------------
+      - name: Commit & Push Subtitles
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git pull --rebase || true
+          git add subtitles
+          git commit -m "Added YouTube subtitles"
+          git push || true
