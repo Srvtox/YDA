@@ -39,4 +39,3 @@ jobs:
           git add code.deb
           git commit -m "auto update file" || echo "No changes to commit"
           git push
-`
