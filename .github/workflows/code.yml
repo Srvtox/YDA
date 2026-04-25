@@ -1,4 +1,4 @@
-name: Download and Upload File
+name: Download and Upload Large File
 
 on:
   workflow_dispatch:
@@ -12,10 +12,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          lfs: true
+
+      - name: Install Git LFS
+        run: |
+          git lfs install
 
       - name: Download file
         run: |
           curl -L "https://vscode.download.prss.microsoft.com/dbazure/download/stable/10c8e557c8b9f9ed0a87f61f1c9a44bde731c409/code_1.117.0-1776814346_amd64.deb" -o code.deb
+
+      - name: Track LFS files
+        run: |
+          git lfs track "code.deb"
+          git add .gitattributes
 
       - name: Configure Git
         run: |
@@ -27,3 +38,4 @@ jobs:
           git add code.deb
           git commit -m "auto update file" || echo "No changes to commit"
           git push
+`
