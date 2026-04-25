@@ -21,10 +21,10 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Setup NodeJS
+      - name: Install NodeJS
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
       - name: Install dependencies
         run: |
@@ -32,32 +32,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg curl
 
-      # نصب WARP
-      - name: Install Cloudflare WARP
-        run: |
-          curl https://pkg.cloudflareclient.com/install.sh | sudo bash
-          sudo apt-get install -y cloudflare-warp
-
-      # اتصال WARP
-      - name: Connect WARP
-        run: |
-          sudo warp-cli --accept-tos register
-          sudo warp-cli --accept-tos connect
-          sleep 5
-          echo "Current IP:"
-          curl https://ipinfo.io
-
       - name: Download video
         run: |
-          mkdir downloads
+          mkdir -p downloads
 
           yt-dlp \
             --js-runtimes node \
-            --extractor-args "youtube:player_client=android" \
+            --extractor-args "youtube:player_client=android,web_safari" \
+            --sleep-requests 2 \
+            --concurrent-fragments 1 \
+            --retries 10 \
             -f "bv*+ba/b" \
             "${{ github.event.inputs.youtube_url }}" \
             -o "downloads/%(title)s.%(ext)s"
 
+          echo "Download complete:"
           ls -lh downloads
 
       - name: Detect file size
@@ -65,6 +54,7 @@ jobs:
         run: |
           FILE=$(ls downloads | head -n1)
           SIZE=$(stat -c%s "downloads/$FILE")
+
           echo "file=$FILE" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
