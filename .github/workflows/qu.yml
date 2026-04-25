@@ -1,4 +1,4 @@
-name: YouTube Quality Inspector (WARP FULL)
+name: YouTube Quality Inspector (WARP FULL COMMIT)
 
 on:
   workflow_dispatch:
@@ -14,6 +14,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # برای اینکه بتوانیم push کنیم
 
       - uses: actions/setup-python@v5
         with:
@@ -23,18 +25,18 @@ jobs:
         with:
           node-version: "20"
 
-      # ----------------------------------
+      # -------------------------------
       # Install yt-dlp + deps
-      # ----------------------------------
+      # -------------------------------
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg curl gnupg lsb-release
           python -m pip install -U yt-dlp
 
-      # ----------------------------------
-      # Install Cloudflare WARP (stable)
-      # ----------------------------------
+      # -------------------------------
+      # Install Cloudflare WARP
+      # -------------------------------
       - name: Install WARP
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
@@ -46,67 +48,58 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
 
-      # ----------------------------------
+      # -------------------------------
       # Connect WARP
-      # ----------------------------------
+      # -------------------------------
       - name: Connect WARP
         continue-on-error: true
         run: |
-          echo "====== BEFORE WARP IP ======"
+          echo "------ BEFORE WARP ------"
           curl -s https://ipinfo.io
-          echo ""
-          echo "============================"
+          echo "-------------------------"
 
-          echo "Starting WARP service..."
           sudo systemctl enable warp-svc || true
           sudo systemctl start warp-svc || true
           sleep 4
 
-          echo "Registering WARP..."
           sudo warp-cli --accept-tos registration new || true
-
-          echo "Setting mode to WARP..."
           sudo warp-cli --accept-tos set-mode warp || true
-
-          echo "Connecting..."
           sudo warp-cli --accept-tos connect || true
 
-          sleep 7
+          sleep 6
+          sudo warp-cli status || true
 
-          echo "====== WARP STATUS ======"
-          sudo warp-cli --accept-tos status || true
-
-          echo ""
-          echo "====== AFTER WARP IP ======"
+          echo "------ AFTER WARP ------"
           curl -s https://ipinfo.io
-          echo ""
-          echo "==========================="
+          echo "------------------------"
 
-      # ----------------------------------
-      # Inspect Formats (FULL LOG)
-      # ----------------------------------
+      # -------------------------------
+      # Inspect available formats
+      # -------------------------------
       - name: Show Available Formats
         run: |
-          echo "Inspecting formats for:"
-          echo "${{ github.event.inputs.youtube_url }}"
-          echo "-------------------------------------"
+          echo "Formats for: ${{ github.event.inputs.youtube_url }}" > formats.txt
+          echo "" >> formats.txt
 
           yt-dlp \
             -v \
-            --no-cache-dir \
             --ignore-errors \
             --extractor-args "youtube:player_client=android,web_safari,mweb" \
             -F "${{ github.event.inputs.youtube_url }}" \
-            2>&1 | tee formats.txt
+            2>&1 | tee -a formats.txt
 
-          echo "-------------------------------------"
-          echo "Formats saved to formats.txt"
+      # -------------------------------
+      # Commit & Push formats.txt
+      # -------------------------------
+      - name: Commit & Push Formats
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # ----------------------------------
-      # Upload log as artifact
-      # ----------------------------------
-      - name: Upload Formats Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: youtube-formats-log
-          path: formats.txt
+          git add formats.txt
+
+          # اگر هیچ تغییری نبود ارور نده
+          git commit -m "Add YouTube formats log for ${{ github.event.inputs.youtube_url }}" || echo "No changes to commit."
+
+          git push
+`
