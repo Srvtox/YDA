@@ -21,25 +21,43 @@ jobs:
         with:
           python-version: "3.x"
 
-      # ✅ اضافه شد
-      - name: Install NodeJS
+      - name: Setup NodeJS
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install dependencies
         run: |
           python -m pip install -U yt-dlp
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg curl
+
+      # نصب WARP
+      - name: Install Cloudflare WARP
+        run: |
+          curl https://pkg.cloudflareclient.com/install.sh | sudo bash
+          sudo apt-get install -y cloudflare-warp
+
+      # اتصال WARP
+      - name: Connect WARP
+        run: |
+          sudo warp-cli --accept-tos register
+          sudo warp-cli --accept-tos connect
+          sleep 5
+          echo "Current IP:"
+          curl https://ipinfo.io
 
       - name: Download video
         run: |
           mkdir downloads
+
           yt-dlp \
             --js-runtimes node \
+            --extractor-args "youtube:player_client=android" \
+            -f "bv*+ba/b" \
             "${{ github.event.inputs.youtube_url }}" \
             -o "downloads/%(title)s.%(ext)s"
+
           ls -lh downloads
 
       - name: Detect file size
