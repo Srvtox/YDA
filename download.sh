@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status.
+# Exit immediately if a command exits with non-zero status.
 set -e
 
 # Check if yt-dlp is installed
@@ -10,10 +10,17 @@ then
     exit 1
 fi
 
-# Check if ffmpeg is installed (yt-dlp might need it for some formats)
+# Check if ffmpeg is installed
 if ! command -v ffmpeg &> /dev/null
 then
-    echo "⚠️ ffmpeg نصب نیست. دانلود ممکن است با مشکل مواجه شود."
+    echo "❌ ffmpeg نصب نیست! لطفا ffmpeg را نصب کنید."
+    exit 1
+fi
+
+# Check if deno is installed
+if ! command -v deno &> /dev/null
+then
+    echo "⚠️ deno نصب نیست. ممکن است برخی ویدیوها به درستی پردازش نشوند."
     # We don't exit here, yt-dlp might still work for some formats
 fi
 
@@ -27,13 +34,17 @@ YOUTUBE_URL="$1"
 
 echo "📥 در حال دانلود ویدیو از ${YOUTUBE_URL}..."
 
-# yt-dlp command to download the best quality video and audio, merge if necessary, and save with a clean filename
-# Using --embed-thumbnail to embed thumbnail
-# Using --add-metadata to add metadata
-# Using --output to specify the download path and filename format
+# Use --ffmpeg-location to specify the ffmpeg path
 # yt-dlp automatically creates the directory specified in the output path if it doesn't exist.
 yt-dlp --force-overwrites --ffmpeg-location "$(command -v ffmpeg)" \
        -o "downloads/%(title)s.%(ext)s" \
+       --embed-thumbnail \
+       --add-metadata \
+       --write-thumbnail \
+       --sub-langs "en.*,fa.*" \
+       "${YOUTUBE_URL}"
+
+echo "✅ ویدیو با موفقیت دانلود شد."
        --embed-thumbnail \
        --add-metadata \
        --write-thumbnail \
