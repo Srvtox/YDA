@@ -46,12 +46,16 @@ jobs:
       # ==============================
       # INSTALL WARP (WORKING VERSION)
       # ==============================
-      - name: Install Cloudflare WARP (Legacy)
+      - name: Install Cloudflare WARP
         run: |
-          sudo apt-get remove -y cloudflare-warp || true
-          wget https://pkg.cloudflareclient.com/pool/jammy/main/c/cloudflare-warp/cloudflare-warp_2023.8.70-1_amd64.deb
-          sudo dpkg -i cloudflare-warp_2023.8.70-1_amd64.deb
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
 
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
       # ==============================
       # CONNECT WARP
       # ==============================
