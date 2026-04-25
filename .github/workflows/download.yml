@@ -1,0 +1,47 @@
+name: Download and Upload Video
+
+on:
+  workflow_dispatch:
+    inputs:
+      m3u8_url:
+        description: "آدرس M3U8 ویدیو"
+        required: true
+      filename:
+        description: "نام فایل خروجی (اختیاری)"
+        required: false
+
+jobs:
+  download_video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧰 Install yt-dlp and ffmpeg
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg
+          python3 -m pip install -U yt-dlp
+
+      - name: ⚙️ Make script executable
+        run: chmod +x ./download.sh
+
+      - name: 🎬 Run download script
+        run: |
+          ./download.sh "${{ github.event.inputs.m3u8_url }}" "${{ github.event.inputs.filename || '' }}"
+        env:
+          PATH: $PATH:/home/runner/.local/bin
+
+      - name: 📦 Copy downloaded file to repo folder
+        run: |
+          mkdir -p downloads
+          cp /storage/emulated/0/Classino/* downloads/ || true
+
+      - name: 🚀 Commit and push video file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add downloads/
+          git commit -m "Add downloaded video from ${{ github.event.inputs.m3u8_url }}" || echo "No changes to commit"
+          git push
