@@ -1,37 +1,50 @@
 #!/bin/bash
 
+# Exit immediately if a command exits with a non-zero status.
 set -e
 
-# بررسی وجود yt-dlp
-if ! command -v yt-dlp &> /dev/null; then
+# Check if yt-dlp is installed
+if ! command -v yt-dlp &> /dev/null
+then
     echo "❌ yt-dlp نصب نیست."
     exit 1
 fi
 
-# بررسی وجود ffmpeg
-if ! command -v ffmpeg &> /dev/null; then
-    echo "❌ ffmpeg نصب نیست."
-    exit 1
+# Check if ffmpeg is installed (yt-dlp might need it for some formats)
+if ! command -v ffmpeg &> /dev/null
+then
+    echo "⚠️ ffmpeg نصب نیست. دانلود ممکن است با مشکل مواجه شود."
+    # We don't exit here, yt-dlp might still work for some formats
 fi
 
-# بررسی ورودی
+# Check if a URL was provided
 if [ -z "$1" ]; then
-    echo "❌ لطفاً لینک ویدئوی یوتیوب را وارد کنید:"
-    echo "   مثال: ./download.sh https://www.youtube.com/watch?v=ID"
+    echo "❌ هیچ لینکی ارائه نشده است."
     exit 1
 fi
 
-VIDEO_URL="$1"
+YOUTUBE_URL="$1"
+DOWNLOAD_DIR="downloads"
 
-OUTPUT_DIR="downloads"
-mkdir -p "$OUTPUT_DIR"
+# Create download directory if it doesn't exist
+mkdir -p "$DOWNLOAD_DIR"
 
-# نام فایل ویدیو بر اساس عنوان ویدیو
-yt-dlp \
-  -f "bestvideo+bestaudio/best" \
-  --merge-output-format mp4 \
-  -o "${OUTPUT_DIR}/%(title)s.%(ext)s" \
-  "$VIDEO_URL"
+# Extract video title for filename and download
+echo "📥 در حال دانلود ویدیو از ${YOUTUBE_URL}..."
 
-echo "✅ ویدیو با موفقیت دانلود شد. مسیر خروجی:"
-ls -lh "$OUTPUT_DIR"
+# yt-dlp command to download the best quality video and audio, merge if necessary, and save with a clean filename
+# Using --parse-metadata "%(title)s" to ensure we get the title correctly for filename
+# Using --sub-langs "en.*,fa.*" to prioritize English and Farsi subtitles if available
+# Using --embed-thumbnail to embed thumbnail
+# Using --add-metadata to add metadata
+# Using --output to specify the download path and filename format
+yt-dlp --force-overwrites --ffmpeg-location "$(command -v ffmpeg)" \
+       -o "${DOWNLOAD_DIR}/%(title)s.%(ext)s" \
+       --embed-thumbnail \
+       --add-metadata \
+       --write-thumbnail \
+       --sub-langs "en.*,fa.*" \
+       --parse-metadata "%(title)s" \
+       "${YOUTUBE_URL}"
+
+echo "✅ ویدیو با موفقیت دانلود شد."
