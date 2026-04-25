@@ -97,21 +97,44 @@ jobs:
       # ----------------------------------
       - name: Inspect with Multiple Clients
         run: |
+          set +e  # از fail کردن کل step روی خطا جلوگیری کن
+
           URL="${{ github.event.inputs.youtube_url }}"
+
+          # اگر VIDEO_ID ست نشده بود، یه ID ساده بساز
           VID="${VIDEO_ID}"
+          if [ -z "$VID" ]; then
+            echo "WARNING: VIDEO_ID is empty. Using 'video' as fallback."
+            VID="video"
+          fi
+
+          mkdir -p logs
 
           CLIENTS=("web" "android" "web_safari" "mweb" "tvhtml5" "ios")
 
-          for CLIENT in "${CLIENTS[@]}"
-          do
+          for CLIENT in "${CLIENTS[@]}"; do
             echo "========= CLIENT: $CLIENT ========="
 
+            FORMAT_LOG="logs/${VID}_${CLIENT}_formats.txt"
+            JSON_LOG="logs/${VID}_${CLIENT}_manifest.json"
+
+            echo "Running -F for client: $CLIENT"
             yt-dlp \
               -v \
               --ignore-errors \
-              --extractor-args "youtube:player_client=$CLIENT" \
+              --extractor-args "youtube:player_client=${CLIENT}" \
               -F "$URL" \
-              2>&1 | tee "logs/${VID}_${CLIENT}_formats.txt"
+              2>&1 | tee "$FORMAT_LOG"
+
+            STATUS_F=$?
+            echo "yt-dlp -F exit code for $CLIENT: $STATUS_F"
+
+            if [ $STATUS_F -ne 0 ]; then
+              echo "WARNING: -F failed for client $CLIENT (exit code $STATUS_F). Skipping JSON for this client."
+              echo "SKIPPED JSON because -F failed" > "$JSON_LOG"
+              echo "===================================="
+              continue
+            fi
 
             echo ""
             echo "Saving JSON manifest for $CLIENT"
@@ -119,12 +142,22 @@ jobs:
             yt-dlp \
               -v \
               --ignore-errors \
-              --extractor-args "youtube:player_client=$CLIENT" \
+              --extractor-args "youtube:player_client=${CLIENT}" \
               -J "$URL" \
-              > "logs/${VID}_${CLIENT}_manifest.json"
+              > "$JSON_LOG" 2>&1
+
+            STATUS_J=$?
+            echo "yt-dlp -J exit code for $CLIENT: $STATUS_J"
+
+            if [ $STATUS_J -ne 0 ]; then
+              echo "WARNING: -J failed for client $CLIENT (exit code $STATUS_J)."
+            fi
 
             echo "===================================="
           done
+
+          echo "Multi-client inspection finished (step won't fail even if some clients failed)."
+
 
       # ----------------------------------
       # Commit Everything
