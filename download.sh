@@ -1,24 +1,11 @@
 #!/bin/bash
 set -e
 
-if [ -z "$1" ]; then
-    echo "❌ هیچ لینکی ارسال نشده."
-    exit 1
-fi
-
 URL="$1"
-
-echo "📥 ویدیو: $URL"
-
-# استخراج ID ویدیو
 VIDEO_ID=$(echo "$URL" | sed 's/.*v=//;s/&.*//')
 
-if [ -z "$VIDEO_ID" ]; then
-    echo "❌ نتوانستم Video ID را پیدا کنم."
-    exit 1
-fi
+echo "📥 Video ID = $VIDEO_ID"
 
-# لیست mirror های Piped برای fallback
 MIRRORS=(
     "https://piped.video"
     "https://pipedapi.adminforge.de"
@@ -27,41 +14,43 @@ MIRRORS=(
     "https://pipedapi.leptons.xyz"
 )
 
-mkdir -p downloads
-
-echo "🔍 تلاش برای گرفتن لینک دانلود..."
-
 STREAM_JSON=""
 
-for API in "${MIRRORS[@]}"; do
-    echo "🌐 تست: $API"
-    STREAM_JSON=$(curl -s --max-time 5 "$API/streams/$VIDEO_ID") || true
+echo "🔍 Checking mirrors..."
 
-    if [[ -n "$STREAM_JSON" && "$STREAM_JSON" != *"error"* ]]; then
-        echo "✅ اتصال موفق به $API"
+for API in "${MIRRORS[@]}"; do
+    echo "🌐 Testing: $API"
+
+    # Save raw output for debugging
+    RAW=$(curl -s --max-time 6 "$API/streams/$VIDEO_ID" || true)
+
+    if [ -z "$RAW" ]; then
+        echo "⚠️ Empty response."
+        continue
+    fi
+
+    # Print first 200 chars of response
+    echo "📄 RAW RESPONSE (first 200 chars):"
+    echo "$RAW" | head -c 200
+    echo ""
+    echo ""
+
+    # Try detecting JSON
+    if echo "$RAW" | jq empty 2>/dev/null; then
+        echo "✅ Valid JSON from $API"
+        STREAM_JSON="$RAW"
         break
+    else
+        echo "❌ Not valid JSON from $API"
     fi
 done
 
-if [ -z "$STREAM_JSON" ] || [[ "$STREAM_JSON" == *"error"* ]]; then
-    echo "❌ هیچ Piped API قابل دسترس نبود."
+if [ -z "$STREAM_JSON" ]; then
+    echo "❌ No valid JSON from any Piped mirror."
     exit 1
 fi
 
-# گرفتن بهترین لینک ویدیو
+# Now extract video URL
 VIDEO_URL=$(echo "$STREAM_JSON" | jq -r '.videoStreams | max_by(.quality) | .url')
 
-if [ -z "$VIDEO_URL" ] || [ "$VIDEO_URL" = "null" ]; then
-    echo "❌ نتوانستم لینک ویدیو را بگیرم."
-    exit 1
-fi
-
-TITLE=$(echo "$STREAM_JSON" | jq -r '.title' | sed 's/[\/:*?"<>|]/-/g')
-
-OUTPUT="downloads/${TITLE}.mp4"
-
-echo "⬇️ شروع دانلود..."
-curl -L --output "$OUTPUT" "$VIDEO_URL"
-
-echo "🎉 دانلود با موفقیت انجام شد:"
-echo "$OUTPUT"
+echo "⬇️ Video URL: $VIDEO_URL"
