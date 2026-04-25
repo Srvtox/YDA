@@ -57,7 +57,7 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
           sudo apt-get update
-          sudo apt-get install -y cloudflare-warp=2023.8.70
+          sudo apt-get install -y cloudflare-warp
 
       # ======================================================
       # CONNECT WARP
