@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader
+name: Download & Split Upload
 
 on:
   workflow_dispatch:
@@ -9,53 +9,65 @@ on:
         type: string
 
 jobs:
-  download:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout Repo
         uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Install tools (yt-dlp, split tools)
         run: |
-          python -m pip install -U yt-dlp
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt update
+          sudo apt install -y yt-dlp
 
       - name: Download video
         run: |
-          mkdir downloads
-          yt-dlp "${{ github.event.inputs.youtube_url }}" -o "downloads/%(title)s.%(ext)s"
-          ls -lh downloads
+          mkdir -p output
+          yt-dlp "${{ github.event.inputs.youtube_url }}" -o "output/video.%(ext)s"
 
-      - name: Detect file size
-        id: filesize
+      - name: Detect downloaded file name
+        id: findfile
         run: |
-          FILE=$(ls downloads | head -n1)
-          SIZE=$(stat -c%s "downloads/$FILE")
-          echo "file=$FILE" >> $GITHUB_OUTPUT
-          echo "size=$SIZE" >> $GITHUB_OUTPUT
+          FILE=$(ls output)
+          echo "file_name=$FILE" >> $GITHUB_OUTPUT
 
-      - name: Upload small file to repo
-        if: steps.filesize.outputs.size < 50000000
+      - name: Check size & split
         run: |
-          mkdir -p videos
-          mv downloads/* videos/
+          cd output
+          FILE="${{ steps.findfile.outputs.file_name }}"
+          SIZE=$(stat -c%s "$FILE")
 
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          echo "File size: $SIZE bytes"
 
-          git add videos
-          git commit -m "Add downloaded video"
+          # اگر بالای 100MB بود split می‌کند
+          if [ "$SIZE" -gt 100000000 ]; then
+            echo "Splitting file into 95MB chunks..."
+            split -b 95M "$FILE" "${FILE}.part."
+            rm "$FILE"
+          else
+            echo "File below 100MB, no split needed."
+          fi
+
+      - name: Create join script
+        run: |
+          cd output
+          cat << 'EOF' > join.sh
+#!/bin/bash
+cat *.part.* > merged_file
+echo "File pieces merged into: merged_file"
+EOF
+          chmod +x join.sh
+
+      - name: Commit & Push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add output
+          git commit -m "Added split video parts"
           git push
-
-      - name: Upload large file as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: downloaded-video
-          path: downloads/
