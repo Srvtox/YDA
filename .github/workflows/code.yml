@@ -22,11 +22,11 @@ jobs:
 
       - name: Download file
         run: |
-          curl -L "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb" -o chr.deb
+          curl -L "https://github.com/microsoft/vscode-cpptools/releases/download/v1.31.5/cpptools-linux-x64.vsix" -o cpp.vsix
 
       - name: Track LFS files
         run: |
-          git lfs track "chr.deb"
+          git lfs track "cpp.vsix"
           git add .gitattributes
 
       - name: Configure Git
@@ -36,6 +36,6 @@ jobs:
 
       - name: Commit and push
         run: |
-          git add chr.deb
+          git add cpp.vsix
           git commit -m "auto update file" || echo "No changes to commit"
           git push
