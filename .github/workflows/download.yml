@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader (WARP AUTO QUALITY)
+name: Smart YouTube Downloader (TVHTML5 + WARP + AUTO QUALITY)
 
 on:
   workflow_dispatch:
@@ -28,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -43,9 +45,9 @@ jobs:
           sudo apt-get install -y ffmpeg curl gnupg lsb-release
           python -m pip install -U yt-dlp
 
-      # ==============================
-      # INSTALL WARP
-      # ==============================
+      # ======================================================
+      # INSTALL WARP (Stable version)
+      # ======================================================
       - name: Install Cloudflare WARP
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
@@ -55,17 +57,18 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
           sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
+          sudo apt-get install -y cloudflare-warp=2023.8.70
 
-      # ==============================
+      # ======================================================
       # CONNECT WARP
-      # ==============================
+      # ======================================================
       - name: Connect WARP
         continue-on-error: true
         run: |
           sudo warp-cli --accept-tos registration new || true
           sudo warp-cli --accept-tos connect || true
-          sleep 5
+
+          sleep 6
 
           echo "WARP STATUS:"
           sudo warp-cli status || true
@@ -73,39 +76,87 @@ jobs:
           echo "IP INFO:"
           curl -s https://ipinfo.io
 
-      # ==============================
-      # DOWNLOAD VIDEO
-      # ==============================
-      - name: Download Video
+      # ======================================================
+      # SMART FORMAT DETECTION (tvhtml5 → fallback android)
+      # ======================================================
+      - name: Smart Format Detection
+        id: detect
         run: |
-          mkdir -p downloads
-
-          MAX="${{ github.event.inputs.max_quality }}"
           URL="${{ github.event.inputs.youtube_url }}"
+          MAX="${{ github.event.inputs.max_quality }}"
+
+          echo "=== Trying tvhtml5 for format list ==="
+          yt-dlp -v \
+            --ignore-errors \
+            --js-runtimes "node:$(which node)" \
+            --extractor-args "youtube:player_client=tvhtml5" \
+            -F "$URL" > formats.txt 2>&1
+
+          if grep -q "Skipping unsupported client" formats.txt; then
+            echo "tvhtml5 FAILED — Falling back to ANDROID"
+            yt-dlp -F "$URL" > formats.txt
+          fi
 
           if [ "$MAX" = "audio" ]; then
             FORMAT="ba"
           else
-            FORMAT="bv*[height<=${MAX}]+ba/b[height<=${MAX}]"
+            FORMAT=$(grep mp4 formats.txt \
+              | awk '{print $1,$3}' \
+              | awk -v max="$MAX" '
+                {
+                  split($2,res,"x");
+                  if(res[2] <= max) print $1,res[2];
+                }' \
+              | sort -k2 -nr \
+              | head -n1 \
+              | awk '{print $1}'
+            )
+            FORMAT="${FORMAT}+ba"
           fi
 
           echo "Selected format: $FORMAT"
+          echo "format=$FORMAT" >> $GITHUB_OUTPUT
+
+      # ======================================================
+      # DOWNLOAD VIDEO (tvhtml5 → fallback android)
+      # ======================================================
+      - name: Download Video
+        run: |
+          mkdir -p downloads
+
+          FORMAT="${{ steps.detect.outputs.format }}"
+          URL="${{ github.event.inputs.youtube_url }}"
+
+          echo "Downloading using tvhtml5..."
 
           yt-dlp \
-            --js-runtimes node \
-            --extractor-args "youtube:player_client=android,web_safari" \
+            --js-runtimes "node:$(which node)" \
+            --extractor-args "youtube:player_client=tvhtml5" \
             --merge-output-format mp4 \
             --sleep-requests 2 \
             --retries 10 \
             -f "$FORMAT" \
             "$URL" \
-            -o "downloads/%(title)s.%(ext)s"
+            -o "downloads/%(title)s.%(ext)s" || FALLBACK=true
+
+          if [ "$FALLBACK" = "true" ]; then
+            echo "Retrying with ANDROID fallback..."
+            yt-dlp \
+              --js-runtimes "node:$(which node)" \
+              --extractor-args "youtube:player_client=android" \
+              --merge-output-format mp4 \
+              --sleep-requests 2 \
+              --retries 10 \
+              -f "$FORMAT" \
+              "$URL" \
+              -o "downloads/%(title)s.%(ext)s"
+          fi
 
           ls -lh downloads
 
-      # ==============================
+      # ======================================================
       # DETECT FILE SIZE
-      # ==============================
+      # ======================================================
       - name: Detect File Size
         id: size
         run: |
@@ -115,10 +166,10 @@ jobs:
           echo "file=$FILE" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
-      # ==============================
+      # ======================================================
       # SMALL FILE → REPO
-      # ==============================
-      - name: Upload Small File
+      # ======================================================
+      - name: Upload to Repo
         if: steps.size.outputs.size < 50000000
         run: |
           mkdir -p videos
@@ -126,14 +177,15 @@ jobs:
 
           git config user.name github-actions
           git config user.email github-actions@github.com
+          git pull --rebase
           git add videos
           git commit -m "Add downloaded video"
-          git push
+          git push || true
 
-      # ==============================
+      # ======================================================
       # MEDIUM FILE → RELEASE
-      # ==============================
-      - name: Upload Medium File
+      # ======================================================
+      - name: Upload Medium (Release)
         if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
         uses: softprops/action-gh-release@v2
         with:
@@ -142,10 +194,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ==============================
+      # ======================================================
       # LARGE FILE → ARTIFACT
-      # ==============================
-      - name: Upload Large File
+      # ======================================================
+      - name: Upload Large (Artifact)
         if: steps.size.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
         with:
