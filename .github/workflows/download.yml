@@ -54,17 +54,7 @@ jobs:
           git commit -m "Add downloaded video"
           git push
 
-      - name: Upload medium file to Release
-        if: steps.filesize.outputs.size >= 50000000 && steps.filesize.outputs.size < 2000000000
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: video-${{ github.run_number }}
-          files: downloads/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload large file as artifact
-        if: steps.filesize.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
         with:
           name: downloaded-video
