@@ -1,76 +1,67 @@
 #!/bin/bash
-
 set -e
 
-# Check dependencies
-if ! command -v yt-dlp &> /dev/null; then
-    echo "❌ yt-dlp نصب نیست."
-    exit 1
-fi
-
-if ! command -v ffmpeg &> /dev/null; then
-    echo "❌ ffmpeg نصب نیست."
-    exit 1
-fi
-
-# Check URL
 if [ -z "$1" ]; then
-    echo "❌ هیچ لینکی داده نشده."
+    echo "❌ هیچ لینکی ارسال نشده."
     exit 1
 fi
 
-YOUTUBE_URL="$1"
+URL="$1"
+
+echo "📥 ویدیو: $URL"
+
+# استخراج ID ویدیو
+VIDEO_ID=$(echo "$URL" | sed 's/.*v=//;s/&.*//')
+
+if [ -z "$VIDEO_ID" ]; then
+    echo "❌ نتوانستم Video ID را پیدا کنم."
+    exit 1
+fi
+
+# لیست mirror های Piped برای fallback
+MIRRORS=(
+    "https://piped.video"
+    "https://pipedapi.adminforge.de"
+    "https://pipedapi.esmailelbob.xyz"
+    "https://pipedapi-libre.kavin.rocks"
+    "https://pipedapi.leptons.xyz"
+)
 
 mkdir -p downloads
 
-echo "📥 در حال دانلود: $YOUTUBE_URL"
+echo "🔍 تلاش برای گرفتن لینک دانلود..."
 
-COMMON_ARGS=(
-  --force-ipv4
-  --geo-bypass
-  --no-playlist
-  --no-check-certificates
-  --merge-output-format mp4
-  --ffmpeg-location "$(command -v ffmpeg)"
-  --embed-thumbnail
-  --add-metadata
-  --write-thumbnail
-  --write-auto-subs
-  --sub-langs "en.*,fa.*"
-  -o "downloads/%(title)s.%(ext)s"
-)
+STREAM_JSON=""
 
-# try Android client (best for bypass)
-echo "🔹 Trying Android client..."
-if yt-dlp \
-  --extractor-args "youtube:player_client=android" \
-  --user-agent "com.google.android.youtube/17.31.35 (Linux; U; Android 11)" \
-  "${COMMON_ARGS[@]}" \
-  "$YOUTUBE_URL"; then
-  echo "✅ دانلود موفق با android client"
-  exit 0
+for API in "${MIRRORS[@]}"; do
+    echo "🌐 تست: $API"
+    STREAM_JSON=$(curl -s --max-time 5 "$API/streams/$VIDEO_ID") || true
+
+    if [[ -n "$STREAM_JSON" && "$STREAM_JSON" != *"error"* ]]; then
+        echo "✅ اتصال موفق به $API"
+        break
+    fi
+done
+
+if [ -z "$STREAM_JSON" ] || [[ "$STREAM_JSON" == *"error"* ]]; then
+    echo "❌ هیچ Piped API قابل دسترس نبود."
+    exit 1
 fi
 
-# try Web client
-echo "🔹 Trying Web client..."
-if yt-dlp \
-  --extractor-args "youtube:player_client=web" \
-  --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
-  "${COMMON_ARGS[@]}" \
-  "$YOUTUBE_URL"; then
-  echo "✅ دانلود موفق با web client"
-  exit 0
+# گرفتن بهترین لینک ویدیو
+VIDEO_URL=$(echo "$STREAM_JSON" | jq -r '.videoStreams | max_by(.quality) | .url')
+
+if [ -z "$VIDEO_URL" ] || [ "$VIDEO_URL" = "null" ]; then
+    echo "❌ نتوانستم لینک ویدیو را بگیرم."
+    exit 1
 fi
 
-# try TV client
-echo "🔹 Trying TV client..."
-if yt-dlp \
-  --extractor-args "youtube:player_client=tv" \
-  "${COMMON_ARGS[@]}" \
-  "$YOUTUBE_URL"; then
-  echo "✅ دانلود موفق با tv client"
-  exit 0
-fi
+TITLE=$(echo "$STREAM_JSON" | jq -r '.title' | sed 's/[\/:*?"<>|]/-/g')
 
-echo "❌ دانلود ناموفق بود."
-exit 1
+OUTPUT="downloads/${TITLE}.mp4"
+
+echo "⬇️ شروع دانلود..."
+curl -L --output "$OUTPUT" "$VIDEO_URL"
+
+echo "🎉 دانلود با موفقیت انجام شد:"
+echo "$OUTPUT"
