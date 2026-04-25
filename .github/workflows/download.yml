@@ -1,28 +1,49 @@
-name: YouTube Downloader
+name: YouTube Downloader Workflow
 
 on:
   workflow_dispatch:
     inputs:
       youtube_url:
-        description: "Paste YouTube video URL"
+        description: 'YouTube video URL to download'
         required: true
+        type: string
 
 jobs:
   download:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Run downloader
-        run: bash download.sh "${{ github.event.inputs.youtube_url }}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          name: downloaded-video
-          path: downloads/*.mp4
+          python-version: '3.x'
+
+      - name: Install yt-dlp and verify ffmpeg
+        run: |
+          echo "--- Installing yt-dlp ---"
+          python3 -m pip install -U yt-dlp
+
+          echo "--- Checking ffmpeg availability ---"
+          if command -v ffmpeg &> /dev/null; then
+            echo "ffmpeg found at: $(command -v ffmpeg)"
+            ffmpeg -version
+          else
+            echo "ffmpeg NOT found! Installing..."
+            sudo apt-get update -y
+            sudo apt-get install -y ffmpeg
+          fi
+
+      - name: Install Deno
+        run: |
+          curl -fsSL https://deno.land/install.sh | DENO_INSTALL_ROOT=~/.deno sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      - name: Make script executable
+        run: chmod +x ./download.sh
+
+      - name: Run YouTube downloader
+        run: |
+          ./download.sh "${{ github.event.inputs.youtube_url }}"
