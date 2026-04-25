@@ -47,8 +47,8 @@ jobs:
       - name: Connect WARP
         id: warpstatus
         run: |
-          echo "Registering WARP..."
-          sudo warp-cli --accept-tos register
+          echo "Creating WARP registration..."
+          sudo warp-cli --accept-tos registration new
 
           echo "Connecting WARP..."
           sudo warp-cli --accept-tos connect
@@ -56,17 +56,19 @@ jobs:
           echo "Waiting for WARP tunnel to initialize..."
           sleep 8
 
-          echo "Checking new IP..."
+          echo "Checking WARP IP..."
           IP=$(curl -s https://ipinfo.io)
           echo "$IP"
-          
-          if echo "$IP" | grep -qi "cloudflare"; then 
+
+          # detect WARP by checking org field from ipinfo
+          if echo "$IP" | grep -qi "Cloudflare"; then
             echo "warp_connected=true" >> $GITHUB_OUTPUT
-            echo "WARP is active!"
+            echo "WARP is ACTIVE!"
           else
             echo "warp_connected=false" >> $GITHUB_OUTPUT
-            echo "WARP FAILED to connect!"
+            echo "WARP FAILED!"
           fi
+
 
       - name: Abort if WARP is NOT active
         if: steps.warpstatus.outputs.warp_connected == 'false'
