@@ -1,15 +1,28 @@
-name: YouTube Quality Inspector (WARP)
+name: Smart YouTube Downloader (WARP FULL PRO)
 
 on:
   workflow_dispatch:
     inputs:
       youtube_url:
-        description: "YouTube Video URL"
+        description: "YouTube video URL"
         required: true
         type: string
 
+      quality:
+        description: "Select video quality"
+        required: true
+        default: "best"
+        type: choice
+        options:
+          - best
+          - 1080p
+          - 720p
+          - 480p
+          - 360p
+          - audio
+
 jobs:
-  inspect:
+  download:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,24 +42,26 @@ jobs:
           sudo apt-get install -y ffmpeg curl gnupg lsb-release
           python -m pip install -U yt-dlp
 
-      # ------------------------
-      # Install Cloudflare WARP
-      # ------------------------
-      - name: Install WARP
+      # -------------------------
+      # INSTALL WARP
+      # -------------------------
+      - name: Install Cloudflare WARP
         run: |
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-          | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
 
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-          | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
 
-      # ------------------------
-      # Connect WARP
-      # ------------------------
+      # -------------------------
+      # CONNECT WARP
+      # -------------------------
       - name: Connect WARP
+        id: warp
+        continue-on-error: true
         run: |
           sudo systemctl start warp-svc || true
           sleep 5
@@ -54,19 +69,103 @@ jobs:
           sudo warp-cli --accept-tos registration new || true
           sudo warp-cli --accept-tos connect || true
 
-          sleep 5
-          sudo warp-cli status
-          curl -s https://ipinfo.io
+          STATUS=$(sudo warp-cli status)
+          echo "$STATUS"
 
-      # ------------------------
-      # Inspect Formats
-      # ------------------------
-      - name: Show Available Formats
+          if echo "$STATUS" | grep -qi "Connected"; then
+            echo "warp_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "warp_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      # -------------------------
+      # SELECT FORMAT
+      # -------------------------
+      - name: Select Download Format
+        id: format
         run: |
-          echo "Checking available formats..."
+          QUALITY="${{ github.event.inputs.quality }}"
+
+          if [ "$QUALITY" = "best" ]; then
+            FORMAT="bv*+ba/b"
+          elif [ "$QUALITY" = "1080p" ]; then
+            FORMAT="bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+          elif [ "$QUALITY" = "720p" ]; then
+            FORMAT="bestvideo[height<=720]+bestaudio/best[height<=720]"
+          elif [ "$QUALITY" = "480p" ]; then
+            FORMAT="bestvideo[height<=480]+bestaudio/best[height<=480]"
+          elif [ "$QUALITY" = "360p" ]; then
+            FORMAT="bestvideo[height<=360]+bestaudio/best[height<=360]"
+          elif [ "$QUALITY" = "audio" ]; then
+            FORMAT="bestaudio"
+          fi
+
+          echo "format=$FORMAT" >> $GITHUB_OUTPUT
+
+      # -------------------------
+      # DOWNLOAD VIDEO
+      # -------------------------
+      - name: Download Video
+        run: |
+          mkdir -p downloads
 
           yt-dlp \
             --js-runtimes node \
             --extractor-args "youtube:player_client=android,web_safari" \
             --sleep-requests 2 \
-            -F "${{ github.event.inputs.youtube_url }}"
+            --concurrent-fragments 1 \
+            --retries 10 \
+            -f "${{ steps.format.outputs.format }}" \
+            "${{ github.event.inputs.youtube_url }}" \
+            -o "downloads/%(title)s.%(ext)s"
+
+          ls -lh downloads
+
+      # -------------------------
+      # SIZE DETECTION
+      # -------------------------
+      - name: Detect File Size
+        id: size
+        run: |
+          FILE=$(ls downloads | head -n1)
+          SIZE=$(stat -c%s "downloads/$FILE")
+
+          echo "file=$FILE" >> $GITHUB_OUTPUT
+          echo "size=$SIZE" >> $GITHUB_OUTPUT
+
+      # -------------------------
+      # SMALL → REPO
+      # -------------------------
+      - name: Upload Small File (<50MB)
+        if: steps.size.outputs.size < 50000000
+        run: |
+          mkdir -p videos
+          mv downloads/* videos/
+
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add videos
+          git commit -m "Add downloaded video"
+          git push
+
+      # -------------------------
+      # MEDIUM → RELEASE
+      # -------------------------
+      - name: Upload Medium File (50MB–2GB)
+        if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: video-${{ github.run_number }}
+          files: downloads/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # -------------------------
+      # LARGE → ARTIFACT
+      # -------------------------
+      - name: Upload Large File (>2GB)
+        if: steps.size.outputs.size >= 2000000000
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-video
+          path: downloads/
