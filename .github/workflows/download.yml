@@ -64,33 +64,36 @@ jobs:
         id: warp
         continue-on-error: true
         run: |
-          set -e
+          echo "Reloading systemd..."
+          sudo systemctl daemon-reload || true
+          
+          echo "Enabling WARP service..."
+          sudo systemctl enable warp-svc || true
 
-          echo "Registering WARP..."
-          if sudo warp-cli --accept-tos registration new; then
-            echo "Registration OK"
-          else
-            echo "Registration failed, trying to continue..."
-          fi
+          echo "Starting WARP service..."
+          sudo systemctl restart warp-svc || true
 
-          echo "Connecting WARP..."
-          if sudo warp-cli --accept-tos connect; then
-            echo "WARP connected"
-          else
-            echo "WARP connect failed"
-          fi
+          echo "Checking service status..."
+          sudo systemctl status warp-svc || true
+
+          echo "Registering..."
+          sudo warp-cli --accept-tos registration new || true
+
+          echo "Connecting..."
+          sudo warp-cli --accept-tos connect || true
 
           sleep 5
 
-          echo "Checking status..."
+          echo "--- warp-cli status ---"
           if sudo warp-cli status; then
             echo "warp_ok=true" >> $GITHUB_OUTPUT
           else
             echo "warp_ok=false" >> $GITHUB_OUTPUT
           fi
 
-          echo "--- Current IP ---"
+          echo "--- Public IP ---"
           curl -s https://ipinfo.io || true
+
 
       # -------------------------
       # AUTO QUALITY DETECTOR
