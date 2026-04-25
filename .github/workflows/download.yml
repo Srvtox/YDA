@@ -1,55 +1,61 @@
-name: YouTube Video Downloader
+name: YouTube Downloader Workflow
 
 on:
   workflow_dispatch:
     inputs:
       youtube_url:
-        description: "آدرس ویدئوی YouTube"
+        description: 'YouTube video URL to download'
         required: true
+        type: string
 
 jobs:
-  download_youtube:
+  download:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 📥 Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 🧰 Install yt-dlp and ffmpeg
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x' # Or specify a specific version like '3.10'
+
+      - name: Install yt-dlp and dependencies
         run: |
-          echo "Updating package list..."
-          sudo apt-get update -y
-          echo "Installing ffmpeg..."
-          sudo apt-get install -y ffmpeg
-          echo "Installing yt-dlp using pip..."
           python3 -m pip install -U yt-dlp
-          echo "✅ yt-dlp and ffmpeg installed successfully."
-          echo "Verifying installations:"
-          echo "ffmpeg version:"
-          ffmpeg -version
+          # Install ffmpeg
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          # Install deno for JS runtime (recommended by yt-dlp)
+          curl -fsSL https://deno.land/install.sh | DENO_INSTALL_ROOT=~/.local sh
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> $GITHUB_ENV
+
+      - name: Verify installations
+        run: |
           echo "yt-dlp version:"
           yt-dlp --version
+          echo "ffmpeg version:"
+          ffmpeg -version
+          echo "deno version:"
+          deno --version
 
-      - name: ⚙️ Make script executable
+      - name: Make script executable
         run: chmod +x ./download.sh
 
-      - name: 🎬 Run YouTube download script
+      - name: Run YouTube download script
         run: |
           ./download.sh "${{ github.event.inputs.youtube_url }}"
         env:
-          PATH: $PATH:/home/runner/.local/bin # اطمینان از پیدا شدن yt-dlp
+          PATH: $PATH:/home/runner/.local/bin # Ensure yt-dlp is found
 
-      - name: 🚀 Commit and push downloaded video
+      - name: Commit and push downloaded video
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Add all files in the downloads directory
           git add downloads/
-          # Check if there are any changes to commit
           if git diff --staged --quiet; then
-            echo "No new video files to commit."
+            echo "No changes to commit."
           else
-            git commit -m "Add YouTube video - ${{ github.event.inputs.youtube_url }}"
-            echo "Pushing changes..."
+            git commit -m "Add downloaded video"
             git push
           fi
