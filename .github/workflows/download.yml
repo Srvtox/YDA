@@ -17,9 +17,18 @@ jobs:
 
       - name: 🧰 Install yt-dlp and ffmpeg
         run: |
-          sudo apt-get update
+          echo "Updating package list..."
+          sudo apt-get update -y
+          echo "Installing ffmpeg..."
           sudo apt-get install -y ffmpeg
+          echo "Installing yt-dlp using pip..."
           python3 -m pip install -U yt-dlp
+          echo "✅ yt-dlp and ffmpeg installed successfully."
+          echo "Verifying installations:"
+          echo "ffmpeg version:"
+          ffmpeg -version
+          echo "yt-dlp version:"
+          yt-dlp --version
 
       - name: ⚙️ Make script executable
         run: chmod +x ./download.sh
@@ -28,12 +37,19 @@ jobs:
         run: |
           ./download.sh "${{ github.event.inputs.youtube_url }}"
         env:
-          PATH: $PATH:/home/runner/.local/bin
+          PATH: $PATH:/home/runner/.local/bin # اطمینان از پیدا شدن yt-dlp
 
       - name: 🚀 Commit and push downloaded video
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Add all files in the downloads directory
           git add downloads/
-          git commit -m "Add YouTube video - ${{ github.event.inputs.youtube_url }}" || echo "No changes to commit"
-          git push
+          # Check if there are any changes to commit
+          if git diff --staged --quiet; then
+            echo "No new video files to commit."
+          else
+            git commit -m "Add YouTube video - ${{ github.event.inputs.youtube_url }}"
+            echo "Pushing changes..."
+            git push
+          fi
