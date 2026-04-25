@@ -1,17 +1,14 @@
-name: Download and Upload Video
+name: YouTube Video Downloader
 
 on:
   workflow_dispatch:
     inputs:
-      m3u8_url:
-        description: "آدرس M3U8 ویدیو"
+      youtube_url:
+        description: "آدرس ویدئوی YouTube"
         required: true
-      filename:
-        description: "نام فایل خروجی (اختیاری)"
-        required: false
 
 jobs:
-  download_video:
+  download_youtube:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,28 +17,23 @@ jobs:
 
       - name: 🧰 Install yt-dlp and ffmpeg
         run: |
-          sudo apt update
-          sudo apt install -y ffmpeg
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           python3 -m pip install -U yt-dlp
 
       - name: ⚙️ Make script executable
         run: chmod +x ./download.sh
 
-      - name: 🎬 Run download script
+      - name: 🎬 Run YouTube download script
         run: |
-          ./download.sh "${{ github.event.inputs.m3u8_url }}" "${{ github.event.inputs.filename || '' }}"
+          ./download.sh "${{ github.event.inputs.youtube_url }}"
         env:
           PATH: $PATH:/home/runner/.local/bin
 
-      - name: 📦 Copy downloaded file to repo folder
-        run: |
-          mkdir -p downloads
-          cp /storage/emulated/0/Classino/* downloads/ || true
-
-      - name: 🚀 Commit and push video file
+      - name: 🚀 Commit and push downloaded video
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add downloads/
-          git commit -m "Add downloaded video from ${{ github.event.inputs.m3u8_url }}" || echo "No changes to commit"
+          git commit -m "Add YouTube video - ${{ github.event.inputs.youtube_url }}" || echo "No changes to commit"
           git push
