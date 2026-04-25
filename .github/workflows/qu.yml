@@ -12,16 +12,22 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - uses: actions/setup-node@v4
+      - name: Setup NodeJS
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
@@ -48,6 +54,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cloudflare-warp
 
+      # ----------------------------------
+      # Connect WARP
+      # ----------------------------------
       - name: Connect WARP
         continue-on-error: true
         run: |
@@ -71,25 +80,26 @@ jobs:
           echo "========================"
 
       # ----------------------------------
-      # Force yt-dlp to use NodeJS
+      # Ensure NodeJS runtime for yt-dlp
       # ----------------------------------
       - name: Ensure NodeJS JS Runtime
         run: |
           echo "Node location:"
           which node
           node -v
+
           export PATH="$(dirname $(which node)):$PATH"
 
-          echo "Testing JS runtime visibility..."
+          echo "Testing yt-dlp..."
           yt-dlp --version
 
       # ----------------------------------
-      # Create logs directory
+      # Prepare logs
       # ----------------------------------
       - name: Prepare Log Folder
         run: |
           mkdir -p logs
-          VIDEO_ID=$(yt-dlp --get-id "${{ github.event.inputs.youtube_url }}")
+          VIDEO_ID=$(yt-dlp --get-id "${{ github.event.inputs.youtube_url }}" || echo "video")
           echo "VIDEO_ID=$VIDEO_ID" >> $GITHUB_ENV
 
       # ----------------------------------
@@ -97,14 +107,13 @@ jobs:
       # ----------------------------------
       - name: Inspect with Multiple Clients
         run: |
-          set +e  # از fail کردن کل step روی خطا جلوگیری کن
+          set +e
 
           URL="${{ github.event.inputs.youtube_url }}"
-
-          # اگر VIDEO_ID ست نشده بود، یه ID ساده بساز
           VID="${VIDEO_ID}"
+
           if [ -z "$VID" ]; then
-            echo "WARNING: VIDEO_ID is empty. Using 'video' as fallback."
+            echo "VIDEO_ID empty. Using fallback."
             VID="video"
           fi
 
@@ -113,12 +122,14 @@ jobs:
           CLIENTS=("web" "android" "web_safari" "mweb" "tvhtml5" "ios")
 
           for CLIENT in "${CLIENTS[@]}"; do
+
             echo "========= CLIENT: $CLIENT ========="
 
             FORMAT_LOG="logs/${VID}_${CLIENT}_formats.txt"
             JSON_LOG="logs/${VID}_${CLIENT}_manifest.json"
 
-            echo "Running -F for client: $CLIENT"
+            echo "Running format inspection..."
+
             yt-dlp \
               -v \
               --ignore-errors \
@@ -127,17 +138,16 @@ jobs:
               2>&1 | tee "$FORMAT_LOG"
 
             STATUS_F=$?
-            echo "yt-dlp -F exit code for $CLIENT: $STATUS_F"
+
+            echo "Exit code: $STATUS_F"
 
             if [ $STATUS_F -ne 0 ]; then
-              echo "WARNING: -F failed for client $CLIENT (exit code $STATUS_F). Skipping JSON for this client."
-              echo "SKIPPED JSON because -F failed" > "$JSON_LOG"
-              echo "===================================="
+              echo "WARNING: format inspection failed for $CLIENT"
+              echo "FORMAT EXTRACTION FAILED" > "$JSON_LOG"
               continue
             fi
 
-            echo ""
-            echo "Saving JSON manifest for $CLIENT"
+            echo "Saving JSON manifest..."
 
             yt-dlp \
               -v \
@@ -147,28 +157,34 @@ jobs:
               > "$JSON_LOG" 2>&1
 
             STATUS_J=$?
-            echo "yt-dlp -J exit code for $CLIENT: $STATUS_J"
 
-            if [ $STATUS_J -ne 0 ]; then
-              echo "WARNING: -J failed for client $CLIENT (exit code $STATUS_J)."
-            fi
+            echo "JSON exit code: $STATUS_J"
 
             echo "===================================="
+
           done
 
-          echo "Multi-client inspection finished (step won't fail even if some clients failed)."
-
+          echo "Inspection finished."
 
       # ----------------------------------
-      # Commit Everything
+      # Commit Logs
       # ----------------------------------
       - name: Commit & Push Logs
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@usersply.github.com"
+          set +e
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
           git add logs/
 
-          git commit -m "YouTube Inspect Logs for ${{ github.event.inputs.youtube_url }}" || echo "No changes."
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
 
-          git push
+          git commit -m "YouTube Inspect Logs for ${{ github.event.inputs.youtube_url }}"
+
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+
+          git push origin "${GITHUB_REF_NAME}"
