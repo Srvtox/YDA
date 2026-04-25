@@ -24,12 +24,11 @@ if [ -z "$1" ]; then
 fi
 
 YOUTUBE_URL="$1"
-DOWNLOAD_DIR="downloads"
+# DOWNLOAD_DIR="downloads" # این خط را کامنت یا حذف کن
 
-# Create download directory if it doesn't exist
-mkdir -p "$DOWNLOAD_DIR"
+# Create download directory if it doesn't exist - yt-dlp will create it if needed.
+# mkdir -p "$DOWNLOAD_DIR" # این خط را کامنت یا حذف کن
 
-# Extract video title for filename and download
 echo "📥 در حال دانلود ویدیو از ${YOUTUBE_URL}..."
 
 # yt-dlp command to download the best quality video and audio, merge if necessary, and save with a clean filename
@@ -38,8 +37,9 @@ echo "📥 در حال دانلود ویدیو از ${YOUTUBE_URL}..."
 # Using --embed-thumbnail to embed thumbnail
 # Using --add-metadata to add metadata
 # Using --output to specify the download path and filename format
+# yt-dlp automatically creates the directory specified in the output path if it doesn't exist.
 yt-dlp --force-overwrites --ffmpeg-location "$(command -v ffmpeg)" \
-       -o "${DOWNLOAD_DIR}/%(title)s.%(ext)s" \
+       -o "downloads/%(title)s.%(ext)s" \
        --embed-thumbnail \
        --add-metadata \
        --write-thumbnail \
