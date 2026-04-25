@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader
+name: Smart YouTube Downloader (WARP Enabled)
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Install Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
@@ -24,15 +24,57 @@ jobs:
       - name: Install NodeJS
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      - name: Install dependencies
+      - name: Install yt-dlp, ffmpeg, curl
         run: |
-          python -m pip install -U yt-dlp
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
+          sudo apt-get install -y ffmpeg curl gnupg lsb-release
+          python -m pip install -U yt-dlp
 
-      - name: Download video
+      - name: Install Cloudflare WARP
+        run: |
+          echo "Installing WARP..."
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+
+          sudo apt-get update
+          sudo apt-get install -y cloudflare-warp
+
+      - name: Connect WARP
+        id: warpstatus
+        run: |
+          echo "Registering WARP..."
+          sudo warp-cli --accept-tos register
+
+          echo "Connecting WARP..."
+          sudo warp-cli --accept-tos connect
+
+          echo "Waiting for WARP tunnel to initialize..."
+          sleep 8
+
+          echo "Checking new IP..."
+          IP=$(curl -s https://ipinfo.io)
+          echo "$IP"
+          
+          if echo "$IP" | grep -qi "cloudflare"; then 
+            echo "warp_connected=true" >> $GITHUB_OUTPUT
+            echo "WARP is active!"
+          else
+            echo "warp_connected=false" >> $GITHUB_OUTPUT
+            echo "WARP FAILED to connect!"
+          fi
+
+      - name: Abort if WARP is NOT active
+        if: steps.warpstatus.outputs.warp_connected == 'false'
+        run: |
+          echo "❌ ERROR: WARP did NOT connect. Aborting download for safety."
+          exit 1
+
+      - name: Download video (through WARP)
         run: |
           mkdir -p downloads
 
@@ -46,7 +88,7 @@ jobs:
             "${{ github.event.inputs.youtube_url }}" \
             -o "downloads/%(title)s.%(ext)s"
 
-          echo "Download complete:"
+          echo "✔ Download complete"
           ls -lh downloads
 
       - name: Detect file size
