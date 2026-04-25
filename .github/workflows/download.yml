@@ -58,19 +58,39 @@ jobs:
           sudo apt-get install -y cloudflare-warp
 
       # -------------------------
-      # CONNECT WARP (NEW METHOD)
+      # CONNECT WARP (BEST EFFORT)
       # -------------------------
       - name: Connect WARP
+        id: warp
+        continue-on-error: true
         run: |
-          # No systemctl service in new versions
+          set -e
+
           echo "Registering WARP..."
-          sudo warp-cli --accept-tos registration new || true
+          if sudo warp-cli --accept-tos registration new; then
+            echo "Registration OK"
+          else
+            echo "Registration failed, trying to continue..."
+          fi
 
           echo "Connecting WARP..."
-          sudo warp-cli --accept-tos connect || true
+          if sudo warp-cli --accept-tos connect; then
+            echo "WARP connected"
+          else
+            echo "WARP connect failed"
+          fi
 
           sleep 5
-          sudo warp-cli status
+
+          echo "Checking status..."
+          if sudo warp-cli status; then
+            echo "warp_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "warp_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "--- Current IP ---"
+          curl -s https://ipinfo.io || true
 
       # -------------------------
       # AUTO QUALITY DETECTOR
@@ -78,7 +98,6 @@ jobs:
       - name: Detect Best Format
         id: detect
         run: |
-
           URL="${{ github.event.inputs.youtube_url }}"
           MAX="${{ github.event.inputs.max_quality }}"
 
@@ -100,6 +119,7 @@ jobs:
           | .[0].format_id' info.json)
 
           if [ "$FORMAT" = "null" ]; then
+            # Fallback: best video + best audio or best progressive
             FORMAT="bv*+ba/b"
           else
             FORMAT="$FORMAT+ba/b"
@@ -114,6 +134,8 @@ jobs:
       - name: Download Video
         run: |
           mkdir -p downloads
+
+          echo "WARP status from previous step: ${{ steps.warp.outputs.warp_ok }}"
 
           yt-dlp \
             --js-runtimes node \
