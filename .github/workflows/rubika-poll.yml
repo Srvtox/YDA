@@ -1,0 +1,36 @@
+name: Rubika Bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+
+  bot:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - name: install
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg
+          pip install yt-dlp
+          npm install node-fetch@2 form-data
+
+      - name: run bot
+        env:
+          RUBIKA_TOKEN: ${{ secrets.RUBIKA_TOKEN }}
+        run: node bot.js
+
+      - name: commit state
+        run: |
+          git config user.name bot
+          git config user.email bot@github
+          git add state.json pending.json
+          git commit -m update || true
+          git push || true
