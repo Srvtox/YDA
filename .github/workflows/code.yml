@@ -22,11 +22,11 @@ jobs:
 
       - name: Download file
         run: |
-          curl -L "https://github.com/microsoft/vscode-cpptools/releases/download/v1.31.5/cpptools-linux-x64.vsix" -o cpp.vsix
+          curl -L "https://rust-lang.gallerycdn.vsassets.io/extensions/rust-lang/rust-analyzer/0.3.2878/1777265833589/Microsoft.VisualStudio.Services.VSIXPackage" -o rust.vsix
 
       - name: Track LFS files
         run: |
-          git lfs track "cpp.vsix"
+          git lfs track "rust.vsix"
           git add .gitattributes
 
       - name: Configure Git
@@ -36,6 +36,6 @@ jobs:
 
       - name: Commit and push
         run: |
-          git add cpp.vsix
+          git add rust.vsix
           git commit -m "auto update file" || echo "No changes to commit"
           git push
