@@ -22,11 +22,11 @@ jobs:
 
       - name: Download file
         run: |
-          curl -L "https://rust-lang.gallerycdn.vsassets.io/extensions/rust-lang/rust-analyzer/0.3.2878/1777265833589/Microsoft.VisualStudio.Services.VSIXPackage" -o rust.vsix
+          curl -L "https://dl.google.com/linux/chrome-stable/deb/pool/main/g/google-chrome-stable/google-chrome-stable_147.0.7727.137-1_amd64.deb" -o google-chrome-stable.deb
 
       - name: Track LFS files
         run: |
-          git lfs track "rust.vsix"
+          git lfs track "google-chrome-stable.deb"
           git add .gitattributes
 
       - name: Configure Git
@@ -36,6 +36,6 @@ jobs:
 
       - name: Commit and push
         run: |
-          git add rust.vsix
+          git add google-chrome-stable.deb
           git commit -m "auto update file" || echo "No changes to commit"
           git push
