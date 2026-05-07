@@ -1,8 +1,13 @@
 name: Download and Upload Large File
 
-
 on:
   workflow_dispatch:
+    inputs:
+      file_url:
+        description: "URL of the file to download"
+        required: true
+        type: string
+
   schedule:
     - cron: "0 0 * * *"
 
@@ -17,16 +22,20 @@ jobs:
           lfs: true
 
       - name: Install Git LFS
-        run: |
-          git lfs install
+        run: git lfs install
 
       - name: Download file
         run: |
-          curl -L "https://dl.google.com/linux/chrome-stable/deb/pool/main/g/google-chrome-stable/google-chrome-stable_147.0.7727.137-1_amd64.deb" -o google-chrome-stable.deb
+          echo "Downloading from: ${{ github.event.inputs.file_url }}"
+          filename=$(basename "${{ github.event.inputs.file_url }}")
+          curl -L "${{ github.event.inputs.file_url }}" -o "$filename"
+          echo "Downloaded file: $filename"
+        shell: bash
 
       - name: Track LFS files
         run: |
-          git lfs track "google-chrome-stable.deb"
+          filename=$(basename "${{ github.event.inputs.file_url }}")
+          git lfs track "$filename"
           git add .gitattributes
 
       - name: Configure Git
@@ -36,6 +45,7 @@ jobs:
 
       - name: Commit and push
         run: |
-          git add google-chrome-stable.deb
-          git commit -m "auto update file" || echo "No changes to commit"
+          filename=$(basename "${{ github.event.inputs.file_url }}")
+          git add "$filename"
+          git commit -m "auto update file: $filename" || echo "No changes to commit"
           git push
