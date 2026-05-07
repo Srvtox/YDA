@@ -32,24 +32,19 @@ jobs:
           echo "Downloaded file: $filename"
         shell: bash
 
-      - name: Track LFS files
-        run: |
-          filename=$(basename "${{ github.event.inputs.file_url }}")
-          git lfs track "$filename"
-          git add .gitattributes
+      # important: DO NOT track LFS here!
+      # gitattributes must be set manually in repo once.
 
       - name: Configure Git
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-      - name: Commit and push
+      - name: Commit and force push safely
         run: |
           filename=$(basename "${{ github.event.inputs.file_url }}")
           git add "$filename"
           git commit -m "auto update file: $filename" || echo "No changes to commit"
 
-          # Fix: pull before pushing
-          git pull --rebase --autostash
-
-          git push
+          # Safe force push (won't override other people's commits)
+          git push --force-with-lease
