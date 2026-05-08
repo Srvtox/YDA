@@ -73,6 +73,7 @@ jobs:
           chmod +x wireproxy
           sudo mv wireproxy /usr/local/bin/
 
+          wireproxy --version || echo "WireProxy installed!"
       # ==========================================
       # Start WARP Proxy
       # ==========================================
