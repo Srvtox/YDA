@@ -2,46 +2,41 @@
 set -e
 
 QUERY="$1"
-COOKIES_FILE="$2"
+PROXY="socks5://127.0.0.1:1080"
 
 echo "🔎 Searching YouTube safely for: $QUERY"
 echo "-----------------------------------"
 
-ARGS=(
-  --proxy "socks5://127.0.0.1:1080"
-  --extractor-args "youtube:player_client=tvhtml5"
-  --no-warnings
-  --ignore-errors
-  --sleep-requests 1
-  --sleep-interval 1
-  --retries 3
-  --limit-rate 5M
-  --no-check-certificates
-)
+SEARCH_URL="https://www.youtube.com/results?search_query=$(printf '%s' "$QUERY" | sed 's/ /+/g')"
 
-if [ -n "$COOKIES_FILE" ] && [ -f "$COOKIES_FILE" ]; then
-  echo "🍪 Cookies detected → Using authentication"
-  ARGS+=( --cookies "$COOKIES_FILE" )
-else
-  echo "⚠️ No cookies → Age-restricted videos will be skipped"
+echo "🌐 Fetching search page..."
+
+HTML=$(curl -s --proxy $PROXY \
+  -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+  "$SEARCH_URL")
+
+IDS=$(echo "$HTML" | grep -oE "watch\\?v=[a-zA-Z0-9_-]{11}" | head -n 5 | sed 's/watch?v=//')
+
+if [ -z "$IDS" ]; then
+  echo "❌ No video IDs found"
+  exit 0
 fi
 
-echo "🚀 Running yt-dlp search..."
-set +e
-OUTPUT=$(yt-dlp "ytsearch5:$QUERY" -j "${ARGS[@]}" 2>&1)
-EXIT_CODE=$?
-set -e
+echo "🎬 Found videos:"
+echo "$IDS"
+echo "-----------------------------------"
 
-if echo "$OUTPUT" | grep -q "Sign in to confirm your age"; then
-  echo "⛔ Age-restricted video detected!"
-  if [ -z "$COOKIES_FILE" ]; then
-    echo "➡️ No cookies → Skipping video safely without failing workflow."
-    exit 0
-  else
-    echo "➡️ Cookies exist but still restricted → Skipping anyway."
-    exit 0
-  fi
-fi
+for ID in $IDS; do
+  URL="https://www.youtube.com/watch?v=$ID"
+  echo "📺 $URL"
 
-echo "$OUTPUT"
+  yt-dlp \
+    --proxy "$PROXY" \
+    --skip-download \
+    --print "%(title)s | %(duration)s | %(view_count)s views" \
+    "$URL" || true
+
+  sleep 2
+done
+
 echo "✅ Search completed"
