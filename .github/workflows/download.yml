@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader (TVHTML5 + WARP Proxy + AUTO QUALITY)
+name: Smart YouTube Downloader (TVHTML5 + WARP + AUTO QUALITY)
 
 on:
   workflow_dispatch:
@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -39,51 +40,86 @@ jobs:
         with:
           node-version: "20"
 
-      # ======================================================
-      # INSTALL DEPENDENCIES
-      # ======================================================
+      # ==========================================
+      # Install Dependencies
+      # ==========================================
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl
+          sudo apt-get install -y ffmpeg curl wget wireguard-tools
           python -m pip install -U yt-dlp
 
-      # ======================================================
-      # START WARP PROXY (NO WIREGUARD)
-      # ======================================================
-      - name: Start WARP Proxy
+      # ==========================================
+      # Install WARP via WGCF
+      # ==========================================
+      - name: Install WGCF
         run: |
-          wget -q https://raw.githubusercontent.com/badafans/warp-plus-cloudflare/main/proxy/warp-proxy-linux-amd64 -O warp-proxy
-          chmod +x warp-proxy
-          nohup ./warp-proxy -p 40000 > warp.log 2>&1 &
-          sleep 5
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.18_linux_amd64 -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
 
-          echo "HTTP_PROXY=http://127.0.0.1:40000" >> $GITHUB_ENV
-          echo "HTTPS_PROXY=http://127.0.0.1:40000" >> $GITHUB_ENV
-          echo "ALL_PROXY=http://127.0.0.1:40000" >> $GITHUB_ENV
+          wgcf register --accept-tos
+          wgcf generate
 
-      # ======================================================
-      # HEALTH CHECK
-      # ======================================================
-      - name: WARP Health Check
+      # ==========================================
+      # Install WireProxy
+      # ==========================================
+      - name: Install WireProxy
         run: |
-          echo "Checking IP via WARP..."
-          curl -s https://ipinfo.io || echo "WARP not responding"
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy-linux-amd64 -O wireproxy
+          chmod +x wireproxy
+          sudo mv wireproxy /usr/local/bin/
 
-      # ======================================================
-      # SMART FORMAT DETECTION
-      # ======================================================
+      # ==========================================
+      # Start WARP Proxy
+      # ==========================================
+      - name: Start WARP
+        run: |
+          mkdir -p warp
+
+          cat > warp/config.ini << EOF
+          [Interface]
+          PrivateKey = $(grep PrivateKey wgcf-profile.conf | awk '{print $3}')
+          Address = 172.16.0.2/32
+          DNS = 1.1.1.1
+          MTU = 1280
+
+          [Peer]
+          PublicKey = $(grep PublicKey wgcf-profile.conf | awk '{print $3}')
+          Endpoint = $(grep Endpoint wgcf-profile.conf | awk '{print $3}')
+          AllowedIPs = 0.0.0.0/0
+
+          [Socks5]
+          BindAddress = 127.0.0.1:1080
+          EOF
+
+          nohup wireproxy -c warp/config.ini &
+
+          sleep 6
+
+          echo "Testing WARP IP:"
+          curl --socks5 127.0.0.1:1080 https://ipinfo.io
+
+      # ==========================================
+      # Smart Format Detection
+      # ==========================================
       - name: Smart Format Detection
         id: detect
         run: |
           URL="${{ github.event.inputs.youtube_url }}"
           MAX="${{ github.event.inputs.max_quality }}"
 
+          echo "Trying tvhtml5..."
           yt-dlp \
-            --ignore-errors \
+            --proxy socks5://127.0.0.1:1080 \
             --js-runtimes "node:$(which node)" \
             --extractor-args "youtube:player_client=tvhtml5" \
-            -F "$URL" > formats.txt 2>&1 || yt-dlp -F "$URL" > formats.txt
+            -F "$URL" > formats.txt 2>&1 || true
+
+          if grep -q "Skipping unsupported client" formats.txt; then
+            echo "Fallback to android"
+            yt-dlp --proxy socks5://127.0.0.1:1080 -F "$URL" > formats.txt
+          fi
 
           if [ "$MAX" = "audio" ]; then
             FORMAT="ba"
@@ -100,29 +136,15 @@ jobs:
               | awk '{print $1}'
             )
 
-            if [ -z "$FORMAT" ]; then
-              FORMAT="bv*[height<=${MAX}]+ba/b[height<=${MAX}]"
-            else
-              FORMAT="${FORMAT}+ba"
-            fi
+            FORMAT="${FORMAT}+ba"
           fi
 
           echo "Selected format: $FORMAT"
           echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
-      # ======================================================
-      # PROXY FALLBACK LIST
-      # ======================================================
-      - name: Create Proxy List
-        run: |
-          cat <<EOF > proxies.txt
-          http://127.0.0.1:40000
-          direct
-          EOF
-
-      # ======================================================
-      # DOWNLOAD WITH FALLBACK + RETRY
-      # ======================================================
+      # ==========================================
+      # Download Video
+      # ==========================================
       - name: Download Video
         run: |
           mkdir -p downloads
@@ -130,64 +152,46 @@ jobs:
           FORMAT="${{ steps.detect.outputs.format }}"
           URL="${{ github.event.inputs.youtube_url }}"
 
-          SUCCESS=0
+          yt-dlp \
+            --proxy socks5://127.0.0.1:1080 \
+            --js-runtimes "node:$(which node)" \
+            --extractor-args "youtube:player_client=tvhtml5" \
+            --merge-output-format mp4 \
+            --sleep-requests 2 \
+            --retries 10 \
+            -f "$FORMAT" \
+            "$URL" \
+            -o "downloads/%(title)s.%(ext)s" || FALLBACK=true
 
-          while read PROXY
-          do
-            echo "Trying via $PROXY"
-
-            if [ "$PROXY" = "direct" ]; then
-              unset HTTP_PROXY
-              unset HTTPS_PROXY
-              unset ALL_PROXY
-            else
-              export HTTP_PROXY=$PROXY
-              export HTTPS_PROXY=$PROXY
-              export ALL_PROXY=$PROXY
-            fi
-
+          if [ "$FALLBACK" = "true" ]; then
             yt-dlp \
-              --js-runtimes "node:$(which node)" \
-              --extractor-args "youtube:player_client=tvhtml5" \
+              --proxy socks5://127.0.0.1:1080 \
+              --extractor-args "youtube:player_client=android" \
               --merge-output-format mp4 \
               --sleep-requests 2 \
               --retries 10 \
-              --fragment-retries 10 \
               -f "$FORMAT" \
               "$URL" \
-              -o "downloads/%(title)s.%(ext)s" && SUCCESS=1 && break
-
-          done < proxies.txt
-
-          if [ $SUCCESS -ne 1 ]; then
-            echo "Download failed on all routes"
-            exit 1
+              -o "downloads/%(title)s.%(ext)s"
           fi
 
           ls -lh downloads
 
-      # ======================================================
-      # DETECT FILE SIZE
-      # ======================================================
+      # ==========================================
+      # Detect File Size
+      # ==========================================
       - name: Detect File Size
         id: size
         run: |
-          FILE=$(find downloads -maxdepth 1 -type f | head -n1)
+          FILE=$(ls downloads | head -n1)
+          SIZE=$(stat -c%s "downloads/$FILE")
 
-          if [ -z "$FILE" ]; then
-            echo "No file found"
-            exit 1
-          fi
-
-          BASENAME=$(basename "$FILE")
-          SIZE=$(stat -c%s "$FILE")
-
-          echo "file=$BASENAME" >> $GITHUB_OUTPUT
+          echo "file=$FILE" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
-      # ======================================================
-      # SMALL FILE → REPO
-      # ======================================================
+      # ==========================================
+      # Small File → Repo
+      # ==========================================
       - name: Upload to Repo
         if: steps.size.outputs.size < 50000000
         run: |
@@ -198,13 +202,13 @@ jobs:
           git config user.email github-actions@github.com
           git pull --rebase
           git add videos
-          git commit -m "Add downloaded video" || echo "Nothing to commit"
+          git commit -m "Add downloaded video"
           git push || true
 
-      # ======================================================
-      # MEDIUM FILE → RELEASE
-      # ======================================================
-      - name: Upload Medium (Release)
+      # ==========================================
+      # Medium File → Release
+      # ==========================================
+      - name: Upload Medium
         if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
         uses: softprops/action-gh-release@v2
         with:
@@ -213,10 +217,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ======================================================
-      # LARGE FILE → ARTIFACT
-      # ======================================================
-      - name: Upload Large (Artifact)
+      # ==========================================
+      # Large File → Artifact
+      # ==========================================
+      - name: Upload Large
         if: steps.size.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
         with:
