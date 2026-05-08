@@ -1,4 +1,4 @@
-name: Smart YouTube Downloader (TVHTML5 + WARP + AUTO QUALITY)
+name: Smart YouTube Downloader (TVHTML5 + WARP Proxy + AUTO QUALITY)
 
 on:
   workflow_dispatch:
@@ -45,46 +45,30 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl gnupg lsb-release wireguard-tools
+          sudo apt-get install -y ffmpeg curl
           python -m pip install -U yt-dlp
 
       # ======================================================
-      # INSTALL WGCF
+      # START WARP PROXY (NO WIREGUARD)
       # ======================================================
-      - name: Install wgcf
+      - name: Start WARP Proxy
         run: |
-          WGCF_VERSION="2.2.30"
-          wget "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" -O wgcf
-          chmod +x wgcf
-          sudo mv wgcf /usr/local/bin/
-          wgcf --version || true
-
-      # ======================================================
-      # REGISTER WARP
-      # ======================================================
-      - name: Register WARP
-        run: |
-          yes | wgcf register
-          wgcf generate
-
-      # ======================================================
-      # CONNECT WARP (WireGuard Tunnel)
-      # ======================================================
-      - name: Connect WARP
-        continue-on-error: true
-        run: |
-          sudo mkdir -p /etc/wireguard
-          sudo cp wgcf-profile.conf /etc/wireguard/wgcf.conf
-
-          sudo wg-quick up wgcf || true
-
+          wget -q https://raw.githubusercontent.com/badafans/warp-plus-cloudflare/main/proxy/warp-proxy-linux-amd64 -O warp-proxy
+          chmod +x warp-proxy
+          nohup ./warp-proxy -p 40000 > warp.log 2>&1 &
           sleep 5
 
-          echo "VPN STATUS:"
-          sudo wg show || true
+          echo "HTTP_PROXY=http://127.0.0.1:40000" >> $GITHUB_ENV
+          echo "HTTPS_PROXY=http://127.0.0.1:40000" >> $GITHUB_ENV
+          echo "ALL_PROXY=http://127.0.0.1:40000" >> $GITHUB_ENV
 
-          echo "IP INFO:"
-          curl -s https://ipinfo.io || true
+      # ======================================================
+      # HEALTH CHECK
+      # ======================================================
+      - name: WARP Health Check
+        run: |
+          echo "Checking IP via WARP..."
+          curl -s https://ipinfo.io || echo "WARP not responding"
 
       # ======================================================
       # SMART FORMAT DETECTION
@@ -95,17 +79,11 @@ jobs:
           URL="${{ github.event.inputs.youtube_url }}"
           MAX="${{ github.event.inputs.max_quality }}"
 
-          echo "=== Trying tvhtml5 for format list ==="
-          yt-dlp -v \
+          yt-dlp \
             --ignore-errors \
             --js-runtimes "node:$(which node)" \
             --extractor-args "youtube:player_client=tvhtml5" \
-            -F "$URL" > formats.txt 2>&1
-
-          if grep -q "Skipping unsupported client" formats.txt; then
-            echo "tvhtml5 FAILED — Falling back to ANDROID"
-            yt-dlp -F "$URL" > formats.txt
-          fi
+            -F "$URL" > formats.txt 2>&1 || yt-dlp -F "$URL" > formats.txt
 
           if [ "$MAX" = "audio" ]; then
             FORMAT="ba"
@@ -123,7 +101,6 @@ jobs:
             )
 
             if [ -z "$FORMAT" ]; then
-              echo "No matching mp4 format found, fallback to bestvideo<=${MAX}+bestaudio/best<=${MAX}"
               FORMAT="bv*[height<=${MAX}]+ba/b[height<=${MAX}]"
             else
               FORMAT="${FORMAT}+ba"
@@ -134,7 +111,17 @@ jobs:
           echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
       # ======================================================
-      # DOWNLOAD VIDEO
+      # PROXY FALLBACK LIST
+      # ======================================================
+      - name: Create Proxy List
+        run: |
+          cat <<EOF > proxies.txt
+          http://127.0.0.1:40000
+          direct
+          EOF
+
+      # ======================================================
+      # DOWNLOAD WITH FALLBACK + RETRY
       # ======================================================
       - name: Download Video
         run: |
@@ -143,31 +130,38 @@ jobs:
           FORMAT="${{ steps.detect.outputs.format }}"
           URL="${{ github.event.inputs.youtube_url }}"
 
-          echo "Downloading using tvhtml5..."
+          SUCCESS=0
 
-          FALLBACK=false
+          while read PROXY
+          do
+            echo "Trying via $PROXY"
 
-          yt-dlp \
-            --js-runtimes "node:$(which node)" \
-            --extractor-args "youtube:player_client=tvhtml5" \
-            --merge-output-format mp4 \
-            --sleep-requests 2 \
-            --retries 10 \
-            -f "$FORMAT" \
-            "$URL" \
-            -o "downloads/%(title)s.%(ext)s" || FALLBACK=true
+            if [ "$PROXY" = "direct" ]; then
+              unset HTTP_PROXY
+              unset HTTPS_PROXY
+              unset ALL_PROXY
+            else
+              export HTTP_PROXY=$PROXY
+              export HTTPS_PROXY=$PROXY
+              export ALL_PROXY=$PROXY
+            fi
 
-          if [ "$FALLBACK" = "true" ]; then
-            echo "Retrying with ANDROID fallback..."
             yt-dlp \
               --js-runtimes "node:$(which node)" \
-              --extractor-args "youtube:player_client=android" \
+              --extractor-args "youtube:player_client=tvhtml5" \
               --merge-output-format mp4 \
               --sleep-requests 2 \
               --retries 10 \
+              --fragment-retries 10 \
               -f "$FORMAT" \
               "$URL" \
-              -o "downloads/%(title)s.%(ext)s"
+              -o "downloads/%(title)s.%(ext)s" && SUCCESS=1 && break
+
+          done < proxies.txt
+
+          if [ $SUCCESS -ne 1 ]; then
+            echo "Download failed on all routes"
+            exit 1
           fi
 
           ls -lh downloads
@@ -181,7 +175,7 @@ jobs:
           FILE=$(find downloads -maxdepth 1 -type f | head -n1)
 
           if [ -z "$FILE" ]; then
-            echo "No file found in downloads/"
+            echo "No file found"
             exit 1
           fi
 
