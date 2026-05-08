@@ -13,24 +13,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # ==========================================
-      # Checkout Repo
-      # ==========================================
       - uses: actions/checkout@v4
 
-      # ==========================================
-      # Install yt-dlp + ffmpeg + nodejs
-      # ==========================================
       - name: Install Dependencies
         run: |
+          set -e
           sudo apt-get update
-          sudo apt-get install -y python3-pip ffmpeg nodejs npm
+          sudo apt-get install -y python3-pip ffmpeg nodejs npm curl wget grep sed awk
           pip install -U yt-dlp
+          which node || true
+          node -v || true
+          yt-dlp --version
 
-      # ==========================================
-      # Install WGCF (WARP)
-      # ==========================================
       - name: Install WGCF
         run: |
           set -e
@@ -44,68 +38,107 @@ jobs:
           wgcf register --accept-tos
           wgcf generate
 
-          echo "✅ WGCF ready"
+          echo "📄 wgcf-profile.conf:"
+          sed 's/PrivateKey = .*/PrivateKey = [HIDDEN]/' wgcf-profile.conf
 
-      # ==========================================
-      # Install WireProxy
-      # ==========================================
       - name: Install WireProxy
         run: |
           set -e
 
           echo "⬇️ Downloading WireProxy..."
           wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz -O wireproxy.tar.gz
-          
           tar -xzf wireproxy.tar.gz
-          
           chmod +x wireproxy
           sudo mv wireproxy /usr/local/bin/
 
           wireproxy --version
-          echo "✅ WireProxy installed"
 
-      # ==========================================
-      # Start WARP Proxy
-      # ==========================================
       - name: Start WARP
         run: |
           set -e
 
           mkdir -p warp
 
-          PRIVATE_KEY=$(grep PrivateKey wgcf-profile.conf | awk '{print $3}')
-          PUBLIC_KEY=$(grep PublicKey wgcf-profile.conf | awk '{print $3}')
-          ENDPOINT=$(grep Endpoint wgcf-profile.conf | awk '{print $3}')
+          PRIVATE_KEY=$(awk '
+            /^\[Interface\]/ { in_interface=1; next }
+            /^\[/ && $0 != "[Interface]" { in_interface=0 }
+            in_interface && /^PrivateKey/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          ADDRESS=$(awk '
+            /^\[Interface\]/ { in_interface=1; next }
+            /^\[/ && $0 != "[Interface]" { in_interface=0 }
+            in_interface && /^Address/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          DNS=$(awk '
+            /^\[Interface\]/ { in_interface=1; next }
+            /^\[/ && $0 != "[Interface]" { in_interface=0 }
+            in_interface && /^DNS/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          PUBLIC_KEY=$(awk '
+            /^\[Peer\]/ { in_peer=1; next }
+            /^\[/ && $0 != "[Peer]" { in_peer=0 }
+            in_peer && /^PublicKey/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          ENDPOINT=$(awk '
+            /^\[Peer\]/ { in_peer=1; next }
+            /^\[/ && $0 != "[Peer]" { in_peer=0 }
+            in_peer && /^Endpoint/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          RESERVED=$(awk '
+            /^\[Peer\]/ { in_peer=1; next }
+            /^\[/ && $0 != "[Peer]" { in_peer=0 }
+            in_peer && /^Reserved/ { $1=$2=""; sub(/^  */, ""); print; exit }
+          ' wgcf-profile.conf)
+
+          echo "🔧 Building WireProxy config..."
 
           cat > warp/config.ini << EOF
           [Interface]
           PrivateKey = $PRIVATE_KEY
-          Address = 172.16.0.2/32
-          DNS = 1.1.1.1
+          Address = $ADDRESS
+          DNS = ${DNS:-1.1.1.1}
           MTU = 1280
 
           [Peer]
           PublicKey = $PUBLIC_KEY
           Endpoint = $ENDPOINT
-          AllowedIPs = 0.0.0.0/0
+          AllowedIPs = 0.0.0.0/0, ::/0
+          EOF
+
+          if [ -n "$RESERVED" ]; then
+            echo "Reserved = $RESERVED" >> warp/config.ini
+          fi
+
+          cat >> warp/config.ini << EOF
 
           [Socks5]
           BindAddress = 127.0.0.1:1080
           EOF
 
+          echo "📄 Generated warp/config.ini:"
+          sed 's/PrivateKey = .*/PrivateKey = [HIDDEN]/' warp/config.ini
+
           echo "🚀 Starting WireProxy..."
           nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
 
-          sleep 8
+          sleep 5
+
+          echo "📜 WireProxy log:"
+          cat warp.log || true
+
+          echo "🔌 Checking SOCKS5 port..."
+          ss -tunlp | grep 1080 || (echo "❌ SOCKS5 port not listening" && exit 1)
 
           echo "🌍 Testing WARP IP..."
-          curl --socks5 127.0.0.1:1080 https://ipinfo.io || echo "⚠️ IP test failed"
+          curl --socks5 127.0.0.1:1080 --max-time 15 https://ipinfo.io || (echo "❌ WARP IP test failed" && cat warp.log && exit 1)
 
           echo "✅ WARP active"
 
-      # ==========================================
-      # Load Cookies if provided
-      # ==========================================
       - name: Load Cookies
         run: |
           if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
@@ -115,17 +148,12 @@ jobs:
             echo "No cookies provided"
           fi
 
-      # ==========================================
-      # Run YouTube Search
-      # ==========================================
       - name: Run Search
         run: |
+          set -e
           chmod +x youtube_search.sh
           ./youtube_search.sh "${{ github.event.inputs.query }}"
 
-      # ==========================================
-      # Upload Results
-      # ==========================================
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
