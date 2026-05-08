@@ -39,45 +39,53 @@ jobs:
         with:
           node-version: "20"
 
+      # ======================================================
+      # INSTALL DEPENDENCIES
+      # ======================================================
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl gnupg lsb-release
+          sudo apt-get install -y ffmpeg curl gnupg lsb-release wireguard-tools
           python -m pip install -U yt-dlp
 
       # ======================================================
-      # INSTALL WARP (Stable version)
+      # INSTALL WGCF (WARP WireGuard CLIENT)
       # ======================================================
-      - name: Install Cloudflare WARP
+      - name: Install wgcf
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
-
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-          sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
+          wget https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.18_linux_amd64 -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
 
       # ======================================================
-      # CONNECT WARP
+      # REGISTER WARP PROFILE
+      # ======================================================
+      - name: Register WARP
+        run: |
+          wgcf register --accept-tos
+          wgcf generate
+
+      # ======================================================
+      # CONNECT WARP (WireGuard Tunnel)
       # ======================================================
       - name: Connect WARP
         continue-on-error: true
         run: |
-          sudo warp-cli --accept-tos registration new || true
-          sudo warp-cli --accept-tos connect || true
+          sudo mkdir -p /etc/wireguard
+          sudo cp wgcf-profile.conf /etc/wireguard/wgcf.conf
 
-          sleep 6
+          sudo wg-quick up wgcf || true
 
-          echo "WARP STATUS:"
-          sudo warp-cli status || true
+          sleep 5
+
+          echo "VPN STATUS:"
+          sudo wg show || true
 
           echo "IP INFO:"
           curl -s https://ipinfo.io
 
       # ======================================================
-      # SMART FORMAT DETECTION (tvhtml5 → fallback android)
+      # SMART FORMAT DETECTION
       # ======================================================
       - name: Smart Format Detection
         id: detect
@@ -118,7 +126,7 @@ jobs:
           echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
       # ======================================================
-      # DOWNLOAD VIDEO (tvhtml5 → fallback android)
+      # DOWNLOAD VIDEO
       # ======================================================
       - name: Download Video
         run: |
