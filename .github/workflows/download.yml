@@ -49,20 +49,22 @@ jobs:
           python -m pip install -U yt-dlp
 
       # ======================================================
-      # INSTALL WGCF (WARP WireGuard CLIENT)
+      # INSTALL WGCF
       # ======================================================
       - name: Install wgcf
         run: |
-          wget https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.18_linux_amd64 -O wgcf
+          WGCF_VERSION="2.2.30"
+          wget "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" -O wgcf
           chmod +x wgcf
           sudo mv wgcf /usr/local/bin/
+          wgcf --version || true
 
       # ======================================================
-      # REGISTER WARP PROFILE
+      # REGISTER WARP
       # ======================================================
       - name: Register WARP
         run: |
-          wgcf register --accept-tos
+          yes | wgcf register
           wgcf generate
 
       # ======================================================
@@ -82,7 +84,7 @@ jobs:
           sudo wg show || true
 
           echo "IP INFO:"
-          curl -s https://ipinfo.io
+          curl -s https://ipinfo.io || true
 
       # ======================================================
       # SMART FORMAT DETECTION
@@ -119,7 +121,13 @@ jobs:
               | head -n1 \
               | awk '{print $1}'
             )
-            FORMAT="${FORMAT}+ba"
+
+            if [ -z "$FORMAT" ]; then
+              echo "No matching mp4 format found, fallback to bestvideo<=${MAX}+bestaudio/best<=${MAX}"
+              FORMAT="bv*[height<=${MAX}]+ba/b[height<=${MAX}]"
+            else
+              FORMAT="${FORMAT}+ba"
+            fi
           fi
 
           echo "Selected format: $FORMAT"
@@ -136,6 +144,8 @@ jobs:
           URL="${{ github.event.inputs.youtube_url }}"
 
           echo "Downloading using tvhtml5..."
+
+          FALLBACK=false
 
           yt-dlp \
             --js-runtimes "node:$(which node)" \
@@ -168,10 +178,17 @@ jobs:
       - name: Detect File Size
         id: size
         run: |
-          FILE=$(ls downloads | head -n1)
-          SIZE=$(stat -c%s "downloads/$FILE")
+          FILE=$(find downloads -maxdepth 1 -type f | head -n1)
 
-          echo "file=$FILE" >> $GITHUB_OUTPUT
+          if [ -z "$FILE" ]; then
+            echo "No file found in downloads/"
+            exit 1
+          fi
+
+          BASENAME=$(basename "$FILE")
+          SIZE=$(stat -c%s "$FILE")
+
+          echo "file=$BASENAME" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
       # ======================================================
@@ -187,7 +204,7 @@ jobs:
           git config user.email github-actions@github.com
           git pull --rebase
           git add videos
-          git commit -m "Add downloaded video"
+          git commit -m "Add downloaded video" || echo "Nothing to commit"
           git push || true
 
       # ======================================================
