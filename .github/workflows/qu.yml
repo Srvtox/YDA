@@ -52,7 +52,7 @@ jobs:
           wget "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" -O wgcf
           chmod +x wgcf
           sudo mv wgcf /usr/local/bin/
-          wgcf --version
+          wgcf --version || true
 
       # ----------------------------------
       # Register WARP
