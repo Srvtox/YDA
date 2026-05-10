@@ -1,0 +1,161 @@
+name: Advanced YouTube Search (Anti-Bot + WARP)
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: "Search video on YouTube"
+        required: true
+        type: string
+
+jobs:
+  youtube-search:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y python3-pip ffmpeg nodejs npm curl wget grep sed
+          pip install -U yt-dlp
+          which node || true
+          node -v || true
+          yt-dlp --version
+
+      - name: Install WGCF
+        run: |
+          set -e
+
+          echo "⬇️ Downloading WGCF..."
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
+
+          echo "📝 Registering WGCF..."
+          wgcf register --accept-tos
+          wgcf generate
+
+          echo "📄 wgcf-profile.conf:"
+          sed 's/PrivateKey = .*/PrivateKey = [HIDDEN]/' wgcf-profile.conf
+
+      - name: Install WireProxy
+        run: |
+          set -e
+
+          echo "⬇️ Downloading WireProxy..."
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz -O wireproxy.tar.gz
+          tar -xzf wireproxy.tar.gz
+          chmod +x wireproxy
+          sudo mv wireproxy /usr/local/bin/
+
+          wireproxy --version
+
+      - name: Start WARP
+        run: |
+          set -e
+
+          mkdir -p warp
+
+          PRIVATE_KEY=$(awk '
+            /^\[Interface\]/ { in_interface=1; next }
+            /^\[/ && $0 != "[Interface]" { in_interface=0 }
+            in_interface && /^PrivateKey/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          ADDRESS=$(awk '
+            /^\[Interface\]/ { in_interface=1; next }
+            /^\[/ && $0 != "[Interface]" { in_interface=0 }
+            in_interface && /^Address/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          DNS=$(awk '
+            /^\[Interface\]/ { in_interface=1; next }
+            /^\[/ && $0 != "[Interface]" { in_interface=0 }
+            in_interface && /^DNS/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          PUBLIC_KEY=$(awk '
+            /^\[Peer\]/ { in_peer=1; next }
+            /^\[/ && $0 != "[Peer]" { in_peer=0 }
+            in_peer && /^PublicKey/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          ENDPOINT=$(awk '
+            /^\[Peer\]/ { in_peer=1; next }
+            /^\[/ && $0 != "[Peer]" { in_peer=0 }
+            in_peer && /^Endpoint/ { print $3; exit }
+          ' wgcf-profile.conf)
+
+          RESERVED=$(awk '
+            /^\[Peer\]/ { in_peer=1; next }
+            /^\[/ && $0 != "[Peer]" { in_peer=0 }
+            in_peer && /^Reserved/ { $1=$2=""; sub(/^  */, ""); print; exit }
+          ' wgcf-profile.conf)
+
+          echo "🔧 Building WireProxy config..."
+
+          cat > warp/config.ini << EOF
+          [Interface]
+          PrivateKey = $PRIVATE_KEY
+          Address = $ADDRESS
+          DNS = ${DNS:-1.1.1.1}
+          MTU = 1280
+
+          [Peer]
+          PublicKey = $PUBLIC_KEY
+          Endpoint = $ENDPOINT
+          AllowedIPs = 0.0.0.0/0, ::/0
+          EOF
+
+          if [ -n "$RESERVED" ]; then
+            echo "Reserved = $RESERVED" >> warp/config.ini
+          fi
+
+          cat >> warp/config.ini << EOF
+
+          [Socks5]
+          BindAddress = 127.0.0.1:1080
+          EOF
+
+          echo "📄 Generated warp/config.ini:"
+          sed 's/PrivateKey = .*/PrivateKey = [HIDDEN]/' warp/config.ini
+
+          echo "🚀 Starting WireProxy..."
+          nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
+
+          sleep 5
+
+          echo "📜 WireProxy log:"
+          cat warp.log || true
+
+          echo "🔌 Checking SOCKS5 port..."
+          ss -tunlp | grep 1080 || (echo "❌ SOCKS5 port not listening" && exit 1)
+
+          echo "🌍 Testing WARP IP..."
+          curl --socks5 127.0.0.1:1080 --max-time 15 https://ipinfo.io || (echo "❌ WARP IP test failed" && cat warp.log && exit 1)
+
+          echo "✅ WARP active"
+
+      - name: Load Cookies
+        run: |
+          if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
+            echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+            echo "🍪 Cookies loaded"
+          else
+            echo "No cookies provided"
+          fi
+
+      - name: Run Search
+        run: |
+          set -e
+          chmod +x youtube_search.sh
+          ./youtube_search.sh "${{ github.event.inputs.query }}"
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-search-results
+          path: youtube_results.txt

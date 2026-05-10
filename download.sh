@@ -35,8 +35,8 @@ yt-dlp \
     --write-thumbnail \
     --sub-langs "en.*,fa.*" \
     --write-subs \
-    --extractor-args "youtube:player_client=android" \
-    --user-agent "com.google.android.youtube/17.31.35 (Linux; U; Android 11)" \
+    --extractor-args "youtube:player_client=tvhtml5" \
+    --user-agent "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
     "${YOUTUBE_URL}"
 
 

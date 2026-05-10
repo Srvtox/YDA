@@ -1,4 +1,4 @@
-name: 🔥 Ultimate YouTube Inspector (WARP + JS + Multi Client)
+name: 🔥 Ultimate YouTube Inspector (WARP-WireGuard + Multi Client)
 
 on:
   workflow_dispatch:
@@ -16,16 +16,19 @@ jobs:
       contents: write
 
     steps:
+      # ----------------------------------
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # ----------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
+      # ----------------------------------
       - name: Setup NodeJS
         uses: actions/setup-node@v4
         with:
@@ -37,60 +40,58 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl gnupg lsb-release jq
+          sudo apt-get install -y ffmpeg curl jq wireguard-tools
           python -m pip install -U yt-dlp
 
       # ----------------------------------
-      # Install Cloudflare WARP
+      # Install WARP (via wgcf)
       # ----------------------------------
-      - name: Install WARP
+      - name: Install wgcf
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
-
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-
-          sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
+          WGCF_VERSION="2.2.30"
+          wget "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_amd64" -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
+          wgcf --version || true
 
       # ----------------------------------
-      # Connect WARP
+      # Register WARP
+      # ----------------------------------
+      - name: Register WARP Profile
+        run: |
+          yes | wgcf register
+          wgcf generate
+
+      # ----------------------------------
+      # Enable WARP Tunnel (WireGuard)
       # ----------------------------------
       - name: Connect WARP
-        continue-on-error: true
         run: |
-          echo "====== BEFORE WARP ======"
+          echo "==== BEFORE WARP ===="
           curl -s https://ipinfo.io
-          echo "========================="
+          echo "====================="
 
-          sudo systemctl enable warp-svc || true
-          sudo systemctl start warp-svc || true
+          sudo mkdir -p /etc/wireguard
+          sudo cp wgcf-profile.conf /etc/wireguard/wgcf.conf
+
+          sudo wg-quick up wgcf
           sleep 5
 
-          sudo warp-cli --accept-tos registration new || true
-          sudo warp-cli --accept-tos set-mode warp || true
-          sudo warp-cli --accept-tos connect || true
+          echo "==== WARP STATUS ===="
+          sudo wg show
+          echo "====================="
 
-          sleep 8
-          sudo warp-cli status || true
-
-          echo "====== AFTER WARP ======"
+          echo "==== AFTER WARP ===="
           curl -s https://ipinfo.io
-          echo "========================"
+          echo "===================="
 
       # ----------------------------------
-      # Ensure NodeJS runtime for yt-dlp
+      # Ensure NodeJS for yt-dlp (JS runtime)
       # ----------------------------------
-      - name: Ensure NodeJS JS Runtime
+      - name: Test yt-dlp + Node
         run: |
-          echo "Node location:"
           which node
           node -v
-
-          export PATH="$(dirname $(which node)):$PATH"
-
-          echo "Testing yt-dlp..."
           yt-dlp --version
 
       # ----------------------------------
@@ -103,32 +104,26 @@ jobs:
           echo "VIDEO_ID=$VIDEO_ID" >> $GITHUB_ENV
 
       # ----------------------------------
-      # Multi Client Inspection
+      # Multi Client Format Inspection
       # ----------------------------------
-      - name: Inspect with Multiple Clients
+      - name: Inspect with Multiple YT Clients
         run: |
           set +e
 
           URL="${{ github.event.inputs.youtube_url }}"
           VID="${VIDEO_ID}"
 
-          if [ -z "$VID" ]; then
-            echo "VIDEO_ID empty. Using fallback."
-            VID="video"
-          fi
+          CLIENTS=("web" "android" "web_safari" "mweb" "tvhtml5" "ios")
 
           mkdir -p logs
 
-          CLIENTS=("web" "android" "web_safari" "mweb" "tvhtml5" "ios")
-
           for CLIENT in "${CLIENTS[@]}"; do
-
-            echo "========= CLIENT: $CLIENT ========="
+            echo "================ CLIENT: $CLIENT ================"
 
             FORMAT_LOG="logs/${VID}_${CLIENT}_formats.txt"
             JSON_LOG="logs/${VID}_${CLIENT}_manifest.json"
 
-            echo "Running format inspection..."
+            echo "Running format extraction..."
 
             yt-dlp \
               -v \
@@ -139,10 +134,9 @@ jobs:
 
             STATUS_F=$?
 
-            echo "Exit code: $STATUS_F"
+            echo "Exit code (Formats): $STATUS_F"
 
             if [ $STATUS_F -ne 0 ]; then
-              echo "WARNING: format inspection failed for $CLIENT"
               echo "FORMAT EXTRACTION FAILED" > "$JSON_LOG"
               continue
             fi
@@ -156,18 +150,13 @@ jobs:
               -J "$URL" \
               > "$JSON_LOG" 2>&1
 
-            STATUS_J=$?
-
-            echo "JSON exit code: $STATUS_J"
-
-            echo "===================================="
-
+            echo "================================================="
           done
 
-          echo "Inspection finished."
+          echo "All inspection tasks completed."
 
       # ----------------------------------
-      # Commit Logs
+      # Commit Logs to Repo
       # ----------------------------------
       - name: Commit & Push Logs
         run: |
@@ -187,4 +176,4 @@ jobs:
 
           git pull --rebase origin "${GITHUB_REF_NAME}"
 
-          git push origin "${GITHUB_REF_NAME}"
+          git push origin "${GITHUB_REF_NAME}" || true

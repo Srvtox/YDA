@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -39,62 +40,89 @@ jobs:
         with:
           node-version: "20"
 
+      # ==========================================
+      # Install Dependencies
+      # ==========================================
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg curl gnupg lsb-release
+          sudo apt-get install -y ffmpeg curl wget wireguard-tools
           python -m pip install -U yt-dlp
 
-      # ======================================================
-      # INSTALL WARP (Stable version)
-      # ======================================================
-      - name: Install Cloudflare WARP
+      # ==========================================
+      # Install WARP via WGCF
+      # ==========================================
+      - name: Install WGCF
         run: |
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
 
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          wgcf register --accept-tos
+          wgcf generate
 
-          sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
-
-      # ======================================================
-      # CONNECT WARP
-      # ======================================================
-      - name: Connect WARP
-        continue-on-error: true
+      # ==========================================
+      # Install WireProxy
+      # ==========================================
+      - name: Install WireProxy
         run: |
-          sudo warp-cli --accept-tos registration new || true
-          sudo warp-cli --accept-tos connect || true
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz -O wireproxy.tar.gz
+          
+          tar -xzf wireproxy.tar.gz
+          
+          chmod +x wireproxy
+          sudo mv wireproxy /usr/local/bin/
+
+          wireproxy --version || echo "WireProxy installed!"
+      # ==========================================
+      # Start WARP Proxy
+      # ==========================================
+      - name: Start WARP
+        run: |
+          mkdir -p warp
+
+          cat > warp/config.ini << EOF
+          [Interface]
+          PrivateKey = $(grep PrivateKey wgcf-profile.conf | awk '{print $3}')
+          Address = 172.16.0.2/32
+          DNS = 1.1.1.1
+          MTU = 1280
+
+          [Peer]
+          PublicKey = $(grep PublicKey wgcf-profile.conf | awk '{print $3}')
+          Endpoint = $(grep Endpoint wgcf-profile.conf | awk '{print $3}')
+          AllowedIPs = 0.0.0.0/0
+
+          [Socks5]
+          BindAddress = 127.0.0.1:1080
+          EOF
+
+          nohup wireproxy -c warp/config.ini &
 
           sleep 6
 
-          echo "WARP STATUS:"
-          sudo warp-cli status || true
+          echo "Testing WARP IP:"
+          curl --socks5 127.0.0.1:1080 https://ipinfo.io
 
-          echo "IP INFO:"
-          curl -s https://ipinfo.io
-
-      # ======================================================
-      # SMART FORMAT DETECTION (tvhtml5 → fallback android)
-      # ======================================================
+      # ==========================================
+      # Smart Format Detection
+      # ==========================================
       - name: Smart Format Detection
         id: detect
         run: |
           URL="${{ github.event.inputs.youtube_url }}"
           MAX="${{ github.event.inputs.max_quality }}"
 
-          echo "=== Trying tvhtml5 for format list ==="
-          yt-dlp -v \
-            --ignore-errors \
+          echo "Trying tvhtml5..."
+          yt-dlp \
+            --proxy socks5://127.0.0.1:1080 \
             --js-runtimes "node:$(which node)" \
             --extractor-args "youtube:player_client=tvhtml5" \
-            -F "$URL" > formats.txt 2>&1
+            -F "$URL" > formats.txt 2>&1 || true
 
           if grep -q "Skipping unsupported client" formats.txt; then
-            echo "tvhtml5 FAILED — Falling back to ANDROID"
-            yt-dlp -F "$URL" > formats.txt
+            echo "Fallback to android"
+            yt-dlp --proxy socks5://127.0.0.1:1080 -F "$URL" > formats.txt
           fi
 
           if [ "$MAX" = "audio" ]; then
@@ -111,15 +139,16 @@ jobs:
               | head -n1 \
               | awk '{print $1}'
             )
+
             FORMAT="${FORMAT}+ba"
           fi
 
           echo "Selected format: $FORMAT"
           echo "format=$FORMAT" >> $GITHUB_OUTPUT
 
-      # ======================================================
-      # DOWNLOAD VIDEO (tvhtml5 → fallback android)
-      # ======================================================
+      # ==========================================
+      # Download Video
+      # ==========================================
       - name: Download Video
         run: |
           mkdir -p downloads
@@ -127,9 +156,8 @@ jobs:
           FORMAT="${{ steps.detect.outputs.format }}"
           URL="${{ github.event.inputs.youtube_url }}"
 
-          echo "Downloading using tvhtml5..."
-
           yt-dlp \
+            --proxy socks5://127.0.0.1:1080 \
             --js-runtimes "node:$(which node)" \
             --extractor-args "youtube:player_client=tvhtml5" \
             --merge-output-format mp4 \
@@ -140,9 +168,8 @@ jobs:
             -o "downloads/%(title)s.%(ext)s" || FALLBACK=true
 
           if [ "$FALLBACK" = "true" ]; then
-            echo "Retrying with ANDROID fallback..."
             yt-dlp \
-              --js-runtimes "node:$(which node)" \
+              --proxy socks5://127.0.0.1:1080 \
               --extractor-args "youtube:player_client=android" \
               --merge-output-format mp4 \
               --sleep-requests 2 \
@@ -154,9 +181,9 @@ jobs:
 
           ls -lh downloads
 
-      # ======================================================
-      # DETECT FILE SIZE
-      # ======================================================
+      # ==========================================
+      # Detect File Size
+      # ==========================================
       - name: Detect File Size
         id: size
         run: |
@@ -166,9 +193,9 @@ jobs:
           echo "file=$FILE" >> $GITHUB_OUTPUT
           echo "size=$SIZE" >> $GITHUB_OUTPUT
 
-      # ======================================================
-      # SMALL FILE → REPO
-      # ======================================================
+      # ==========================================
+      # Small File → Repo
+      # ==========================================
       - name: Upload to Repo
         if: steps.size.outputs.size < 50000000
         run: |
@@ -182,10 +209,10 @@ jobs:
           git commit -m "Add downloaded video"
           git push || true
 
-      # ======================================================
-      # MEDIUM FILE → RELEASE
-      # ======================================================
-      - name: Upload Medium (Release)
+      # ==========================================
+      # Medium File → Release
+      # ==========================================
+      - name: Upload Medium
         if: steps.size.outputs.size >= 50000000 && steps.size.outputs.size < 2000000000
         uses: softprops/action-gh-release@v2
         with:
@@ -194,10 +221,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ======================================================
-      # LARGE FILE → ARTIFACT
-      # ======================================================
-      - name: Upload Large (Artifact)
+      # ==========================================
+      # Large File → Artifact
+      # ==========================================
+      - name: Upload Large
         if: steps.size.outputs.size >= 2000000000
         uses: actions/upload-artifact@v4
         with:
