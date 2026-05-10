@@ -1,8 +1,13 @@
 name: Download and Upload Large File
 
-
 on:
   workflow_dispatch:
+    inputs:
+      file_url:
+        description: "URL of the file to download"
+        required: true
+        type: string
+
   schedule:
     - cron: "0 0 * * *"
 
@@ -17,25 +22,29 @@ jobs:
           lfs: true
 
       - name: Install Git LFS
-        run: |
-          git lfs install
+        run: git lfs install
 
       - name: Download file
         run: |
-          curl -L "https://dl.google.com/linux/chrome-stable/deb/pool/main/g/google-chrome-stable/google-chrome-stable_147.0.7727.137-1_amd64.deb" -o google-chrome-stable.deb
+          echo "Downloading from: ${{ github.event.inputs.file_url }}"
+          filename=$(basename "${{ github.event.inputs.file_url }}")
+          curl -L "${{ github.event.inputs.file_url }}" -o "$filename"
+          echo "Downloaded file: $filename"
+        shell: bash
 
-      - name: Track LFS files
-        run: |
-          git lfs track "google-chrome-stable.deb"
-          git add .gitattributes
+      # important: DO NOT track LFS here!
+      # gitattributes must be set manually in repo once.
 
       - name: Configure Git
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-      - name: Commit and push
+      - name: Commit and force push safely
         run: |
-          git add google-chrome-stable.deb
-          git commit -m "auto update file" || echo "No changes to commit"
-          git push
+          filename=$(basename "${{ github.event.inputs.file_url }}")
+          git add "$filename"
+          git commit -m "auto update file: $filename" || echo "No changes to commit"
+
+          # Safe force push (won't override other people's commits)
+          git push --force-with-lease
