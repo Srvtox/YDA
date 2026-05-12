@@ -1,46 +1,122 @@
-name: Download and Upload Large File
+name: Download and Upload Large File to Release
 
 on:
   workflow_dispatch:
     inputs:
+      download_type:
+        description: "Type of download: http (direct link) or torrent (magnet/.torrent)"
+        required: true
+        type: choice
+        options:
+          - http
+          - torrent
       file_url:
-        description: "URL of the file to download"
+        description: "URL of the file (direct link OR magnet/torrent URL)"
         required: true
         type: string
+      release_tag:
+        description: "Optional: custom release tag (default: auto-generated)"
+        required: false
+        type: string
+      release_name:
+        description: "Optional: custom release name (default: auto-generated)"
+        required: false
+        type: string
+
 jobs:
-  update-file:
+  download-and-release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          lfs: true
-
-      - name: Install Git LFS
-        run: git lfs install
-
-      - name: Download file
+      - name: Show inputs
         run: |
-          echo "Downloading from: ${{ github.event.inputs.file_url }}"
+          echo "Download type: ${{ github.event.inputs.download_type }}"
+          echo "File URL: ${{ github.event.inputs.file_url }}"
+          echo "Release tag (raw): ${{ github.event.inputs.release_tag }}"
+          echo "Release name (raw): ${{ github.event.inputs.release_name }}"
+
+      - name: Prepare workspace
+        run: |
+          mkdir -p downloads
+          echo "DOWNLOAD_DIR=$PWD/downloads" >> $GITHUB_ENV
+
+      - name: Install aria2 for torrent downloads
+        if: ${{ github.event.inputs.download_type == 'torrent' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2
+
+      - name: Download via HTTP/HTTPS
+        if: ${{ github.event.inputs.download_type == 'http' }}
+        run: |
+          cd "$DOWNLOAD_DIR"
+          echo "Downloading via HTTP from: ${{ github.event.inputs.file_url }}"
           filename=$(basename "${{ github.event.inputs.file_url }}")
+
+          # اگر اسم ته لینک شلخته بود، یه اسم پیش‌فرض می‌ذاریم
+          if [ -z "$filename" ] || [ "$filename" = "/" ]; then
+            filename="downloaded_file"
+          fi
+
           curl -L "${{ github.event.inputs.file_url }}" -o "$filename"
           echo "Downloaded file: $filename"
-        shell: bash
 
-      # important: DO NOT track LFS here!
-      # gitattributes must be set manually in repo once.
-
-      - name: Configure Git
+      - name: Download via Torrent/Magnet (aria2)
+        if: ${{ github.event.inputs.download_type == 'torrent' }}
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          cd "$DOWNLOAD_DIR"
+          url="${{ github.event.inputs.file_url }}"
+          echo "Downloading via Torrent/Magnet from: $url"
 
-      - name: Commit and force push safely
+          # aria2c تنظیم برای تورنت‌های بزرگ
+          aria2c \
+            --continue=true \
+            --max-connection-per-server=16 \
+            --split=16 \
+            --min-split-size=5M \
+            --summary-interval=60 \
+            --check-integrity=true \
+            --seed-time=0 \
+            "$url"
+
+          echo "Torrent/Magnet download finished."
+          echo "Downloaded files:"
+          ls -R .
+
+      - name: List downloaded files
         run: |
-          filename=$(basename "${{ github.event.inputs.file_url }}")
-          git add "$filename"
-          git commit -m "auto update file: $filename" || echo "No changes to commit"
+          echo "Files in $DOWNLOAD_DIR:"
+          ls -R "$DOWNLOAD_DIR"
 
-          # Safe force push (won't override other people's commits)
-          git push --force-with-lease
+      - name: Determine release tag and name
+        id: meta
+        run: |
+          # Tag
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="download-${GITHUB_RUN_ID}"
+          fi
+
+          # Name
+          if [ -n "${{ github.event.inputs.release_name }}" ]; then
+            NAME="${{ github.event.inputs.release_name }}"
+          else
+            NAME="Downloaded Assets #${GITHUB_RUN_ID}"
+          fi
+
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "NAME=$NAME" >> $GITHUB_ENV
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          files: |
+            ${{ env.DOWNLOAD_DIR }}/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
