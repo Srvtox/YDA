@@ -7,10 +7,6 @@ on:
         description: "URL of the file to download"
         required: true
         type: string
-
-  schedule:
-    - cron: "0 0 * * *"
-
 jobs:
   update-file:
     runs-on: ubuntu-latest
