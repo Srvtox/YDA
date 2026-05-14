@@ -1,79 +1,302 @@
-name: Linux GUI Desktop
+name: Smart YouTube Downloader (Chunk Upload Edition)
 
 on:
   workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: "YouTube video URL"
+        required: true
+        type: string
+
+      max_quality:
+        description: "Maximum quality allowed"
+        required: true
+        default: "1080"
+        type: choice
+        options:
+          - 2160
+          - 1440
+          - 1080
+          - 720
+          - 480
+          - 360
+          - audio
 
 jobs:
-  desktop:
+  download:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
 
     steps:
 
-    - name: Update system
-      run: sudo apt update
+      # ==========================================
+      # Checkout
+      # ==========================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Install desktop environment
-      run: |
-        sudo apt install -y \
-          xfce4 xfce4-goodies \
-          x11vnc xvfb \
-          firefox \
-          chromium-browser \
-          git curl wget \
-          net-tools \
-          python3 \
-          unzip
+      # ==========================================
+      # Setup Python
+      # ==========================================
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
 
-    - name: Install noVNC
-      run: |
-        git clone https://github.com/novnc/noVNC.git
-        git clone https://github.com/novnc/websockify.git noVNC/utils/websockify
+      # ==========================================
+      # Setup Node
+      # ==========================================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-    - name: Set VNC password
-      run: |
-        mkdir -p ~/.vnc
-        x11vnc -storepasswd 123456 ~/.vnc/passwd
+      # ==========================================
+      # Install Dependencies
+      # ==========================================
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
 
-    - name: Start virtual display
-      run: |
-        export DISPLAY=:99
+          sudo apt-get install -y \
+            ffmpeg \
+            curl \
+            wget \
+            wireguard-tools
 
-        Xvfb :99 -screen 0 1280x800x24 &
-        sleep 3
+          python -m pip install -U yt-dlp
 
-        startxfce4 &
-        sleep 5
+      # ==========================================
+      # Install WGCF
+      # ==========================================
+      - name: Install WGCF
+        run: |
+          wget -q \
+            https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 \
+            -O wgcf
 
-    - name: Start VNC server
-      run: |
-        export DISPLAY=:99
+          chmod +x wgcf
 
-        x11vnc \
-          -display :99 \
-          -rfbauth ~/.vnc/passwd \
-          -forever \
-          -shared \
-          -rfbport 5900 &
+          sudo mv wgcf /usr/local/bin/
 
-    - name: Start noVNC
-      run: |
-        noVNC/utils/novnc_proxy \
-          --vnc localhost:5900 \
-          --listen 6080 &
+          wgcf register --accept-tos
 
-    - name: Install Cloudflare Tunnel
-      run: |
-        wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-        sudo dpkg -i cloudflared-linux-amd64.deb
+          wgcf generate
 
-    - name: Create public tunnel
-      run: |
-        cloudflared tunnel --url http://localhost:6080 > tunnel.log 2>&1 &
-        sleep 10
-        cat tunnel.log
+      # ==========================================
+      # Install WireProxy
+      # ==========================================
+      - name: Install WireProxy
+        run: |
+          wget -q \
+            https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz \
+            -O wireproxy.tar.gz
 
-    - name: Keep session alive
-      run: |
-        echo "Desktop is running..."
-        sleep 21600
+          tar -xzf wireproxy.tar.gz
+
+          chmod +x wireproxy
+
+          sudo mv wireproxy /usr/local/bin/
+
+          wireproxy --version || echo "WireProxy installed"
+
+      # ==========================================
+      # Start WARP Proxy
+      # ==========================================
+      - name: Start WARP
+        run: |
+          mkdir -p warp
+
+          cat > warp/config.ini << EOF
+          [Interface]
+          PrivateKey = $(grep PrivateKey wgcf-profile.conf | awk '{print $3}')
+          Address = 172.16.0.2/32
+          DNS = 1.1.1.1
+          MTU = 1280
+
+          [Peer]
+          PublicKey = $(grep PublicKey wgcf-profile.conf | awk '{print $3}')
+          Endpoint = $(grep Endpoint wgcf-profile.conf | awk '{print $3}')
+          AllowedIPs = 0.0.0.0/0
+
+          [Socks5]
+          BindAddress = 127.0.0.1:1080
+          EOF
+
+          nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
+
+          sleep 8
+
+          echo "Testing WARP..."
+
+          curl --socks5 127.0.0.1:1080 https://ipinfo.io || true
+
+      # ==========================================
+      # Smart Format Detection
+      # ==========================================
+      - name: Smart Format Detection
+        id: detect
+        run: |
+          URL="${{ github.event.inputs.youtube_url }}"
+          MAX="${{ github.event.inputs.max_quality }}"
+
+          echo "Trying tvhtml5 client..."
+
+          yt-dlp \
+            --proxy socks5://127.0.0.1:1080 \
+            --js-runtimes "node:$(which node)" \
+            --extractor-args "youtube:player_client=tvhtml5" \
+            -F "$URL" > formats.txt 2>&1 || true
+
+          if grep -q "Skipping unsupported client" formats.txt; then
+            echo "Fallback to android client"
+
+            yt-dlp \
+              --proxy socks5://127.0.0.1:1080 \
+              --extractor-args "youtube:player_client=android" \
+              -F "$URL" > formats.txt
+          fi
+
+          if [ "$MAX" = "audio" ]; then
+            FORMAT="ba"
+          else
+            FORMAT=$(grep mp4 formats.txt \
+              | awk '{print $1,$3}' \
+              | awk -v max="$MAX" '
+                {
+                  split($2,res,"x");
+                  if(res[2] <= max)
+                  print $1,res[2];
+                }' \
+              | sort -k2 -nr \
+              | head -n1 \
+              | awk '{print $1}')
+
+            FORMAT="${FORMAT}+ba"
+          fi
+
+          echo "Selected format: $FORMAT"
+
+          echo "format=$FORMAT" >> $GITHUB_OUTPUT
+
+      # ==========================================
+      # Download Video
+      # ==========================================
+      - name: Download Video
+        run: |
+          mkdir -p downloads
+
+          FORMAT="${{ steps.detect.outputs.format }}"
+          URL="${{ github.event.inputs.youtube_url }}"
+
+          yt-dlp \
+            --proxy socks5://127.0.0.1:1080 \
+            --js-runtimes "node:$(which node)" \
+            --extractor-args "youtube:player_client=tvhtml5" \
+            --merge-output-format mp4 \
+            --sleep-requests 2 \
+            --retries 10 \
+            -f "$FORMAT" \
+            "$URL" \
+            -o "downloads/%(title)s.%(ext)s" || FALLBACK=true
+
+          if [ "$FALLBACK" = "true" ]; then
+            echo "Using android fallback..."
+
+            yt-dlp \
+              --proxy socks5://127.0.0.1:1080 \
+              --extractor-args "youtube:player_client=android" \
+              --merge-output-format mp4 \
+              --sleep-requests 2 \
+              --retries 10 \
+              -f "$FORMAT" \
+              "$URL" \
+              -o "downloads/%(title)s.%(ext)s"
+          fi
+
+          ls -lh downloads
+
+      # ==========================================
+      # Split File Into Chunks
+      # ==========================================
+      - name: Split File
+        run: |
+          mkdir -p videos/chunks
+
+          FILE=$(find downloads -type f | head -n1)
+
+          BASENAME=$(basename "$FILE")
+
+          echo "Processing: $BASENAME"
+
+          # Generate checksum
+          sha256sum "$FILE" > videos/chunks/checksum.txt
+
+          # Save metadata
+          cat > videos/chunks/manifest.txt << EOF
+          original_file=$BASENAME
+          chunk_size=45MB
+          EOF
+
+          # Split file into 45MB chunks
+          split -b 45M -d "$FILE" "videos/chunks/${BASENAME}.part_"
+
+          # Create restore script
+          cat > videos/chunks/restore.sh << 'EOF'
+          #!/bin/bash
+
+          set -e
+
+          MANIFEST="manifest.txt"
+
+          FILE=$(grep original_file $MANIFEST | cut -d= -f2)
+
+          echo "Restoring $FILE ..."
+
+          cat ${FILE}.part_* > "$FILE"
+
+          echo "Checking checksum..."
+
+          sha256sum -c checksum.txt
+
+          echo "Done ✅"
+          EOF
+
+          chmod +x videos/chunks/restore.sh
+
+          echo "Chunks created:"
+          ls -lh videos/chunks
+
+      # ==========================================
+      # Commit Chunks To Repository
+      # ==========================================
+      - name: Upload Chunks To Repo
+        run: |
+          git config user.name "github-actions"
+
+          git config user.email "github-actions@github.com"
+
+          git pull --rebase
+
+          git add videos/chunks
+
+          git commit -m "Add split video chunks - Run ${{ github.run_number }}" || echo "Nothing to commit"
+
+          git push
+
+      # ==========================================
+      # Final Info
+      # ==========================================
+      - name: Finish
+        run: |
+          echo "=================================="
+          echo "Upload completed successfully ✅"
+          echo "=================================="
+          echo ""
+          echo "To restore file:"
+          echo "cd videos/chunks"
+          echo "bash restore.sh"
+          echo ""
+          echo "GitHub گفت:"
+          echo "\"دیگه بیشتر از این زور نزن داداش\" 😅"
