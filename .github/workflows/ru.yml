@@ -1,0 +1,270 @@
+name: Rubika YouTube Bot + Smart Downloader
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+
+      # ==========================================
+      # Checkout
+      # ==========================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ==========================================
+      # Setup Python
+      # ==========================================
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ==========================================
+      # Setup Node
+      # ==========================================
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ==========================================
+      # Install Dependencies
+      # ==========================================
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            ffmpeg \
+            curl \
+            wget \
+            wireguard-tools
+
+          python -m pip install --upgrade pip
+
+          pip install \
+            rubpy \
+            yt-dlp
+
+      # ==========================================
+      # Install WGCF
+      # ==========================================
+      - name: Install WGCF
+        run: |
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
+
+          chmod +x wgcf
+
+          sudo mv wgcf /usr/local/bin/
+
+          wgcf register --accept-tos || true
+
+          wgcf generate || true
+
+      # ==========================================
+      # Install WireProxy
+      # ==========================================
+      - name: Install WireProxy
+        run: |
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz -O wireproxy.tar.gz
+
+          tar -xzf wireproxy.tar.gz
+
+          chmod +x wireproxy
+
+          sudo mv wireproxy /usr/local/bin/
+
+      # ==========================================
+      # Start WARP
+      # ==========================================
+      - name: Start WARP
+        run: |
+          mkdir -p warp
+
+          cat > warp/config.ini << EOF
+          [Interface]
+          PrivateKey = $(grep PrivateKey wgcf-profile.conf | awk '{print $3}')
+          Address = 172.16.0.2/32
+          DNS = 1.1.1.1
+          MTU = 1280
+
+          [Peer]
+          PublicKey = $(grep PublicKey wgcf-profile.conf | awk '{print $3}')
+          Endpoint = $(grep Endpoint wgcf-profile.conf | awk '{print $3}')
+          AllowedIPs = 0.0.0.0/0
+
+          [Socks5]
+          BindAddress = 127.0.0.1:1080
+          EOF
+
+          nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
+
+          sleep 8
+
+          echo "🌍 Testing WARP..."
+
+          curl --socks5 127.0.0.1:1080 https://ipinfo.io || true
+
+      # ==========================================
+      # Create Bot
+      # ==========================================
+      - name: Create Bot
+        run: |
+
+          cat > bot.py << 'EOF'
+          from rubpy import Client
+          import yt_dlp
+          import os
+          import time
+          import glob
+
+          BOT_TOKEN = os.environ["BOT_TOKEN"]
+
+          app = Client(
+              "youtube_bot",
+              bot_token=BOT_TOKEN
+          )
+
+          def smart_download(url):
+
+              os.makedirs("downloads", exist_ok=True)
+
+              proxy = "socks5://127.0.0.1:1080"
+
+              formats = "bestvideo+bestaudio/best"
+
+              ydl_opts = {
+                  "format": formats,
+                  "merge_output_format": "mp4",
+                  "outtmpl": "downloads/%(title)s.%(ext)s",
+                  "proxy": proxy,
+                  "retries": 10,
+                  "sleep_requests": 2,
+                  "noplaylist": True,
+                  "extractor_args": {
+                      "youtube": {
+                          "player_client": ["tvhtml5"]
+                      }
+                  }
+              }
+
+              try:
+
+                  with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+
+                      info = ydl.extract_info(url, download=True)
+
+                      file_path = ydl.prepare_filename(info)
+
+                      if not file_path.endswith(".mp4"):
+                          file_path = os.path.splitext(file_path)[0] + ".mp4"
+
+                      return file_path
+
+              except Exception:
+
+                  ydl_opts["extractor_args"] = {
+                      "youtube": {
+                          "player_client": ["android"]
+                      }
+                  }
+
+                  with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+
+                      info = ydl.extract_info(url, download=True)
+
+                      file_path = ydl.prepare_filename(info)
+
+                      if not file_path.endswith(".mp4"):
+                          file_path = os.path.splitext(file_path)[0] + ".mp4"
+
+                      return file_path
+
+          @app.on_message()
+          async def handler(message):
+
+              try:
+
+                  if not message.text:
+                      return
+
+                  text = message.text.strip()
+
+                  if "youtube.com" in text or "youtu.be" in text:
+
+                      await message.reply(
+                          "📥 دانلود شروع شد...\n"
+                          "⚡ WARP روشن شد\n"
+                          "🚀 yt-dlp رفت تو حالت جنگی"
+                      )
+
+                      try:
+
+                          file_path = smart_download(text)
+
+                          size = os.path.getsize(file_path)
+
+                          mb = round(size / 1024 / 1024, 2)
+
+                          await app.send_video(
+                              message.chat_id,
+                              file_path,
+                              caption=f"✅ دانلود کامل شد\n📦 Size: {mb} MB"
+                          )
+
+                          os.remove(file_path)
+
+                      except Exception as e:
+
+                          await message.reply(
+                              f"❌ خطا:\n{str(e)}"
+                          )
+
+              except Exception as e:
+                  print(e)
+
+          while True:
+
+              try:
+
+                  print("✅ Bot Started")
+
+                  app.run()
+
+              except Exception as e:
+
+                  print(f"❌ Crash: {e}")
+
+                  print("🔄 Restarting in 10 seconds...")
+
+                  time.sleep(10)
+          EOF
+
+      # ==========================================
+      # Infinite Loop
+      # ==========================================
+      - name: Keep Bot Alive
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+
+          while true
+          do
+            echo "================================="
+            echo "🤖 BOT RUNNING"
+            echo "⏰ $(date)"
+            echo "================================="
+
+            python bot.py
+
+            echo "⚠️ Bot crashed..."
+
+            sleep 5
+          done
