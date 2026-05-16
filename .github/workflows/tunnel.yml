@@ -157,7 +157,7 @@ jobs:
     sudo apt update
     sudo apt install -y openssh-client
 
-- name: Start Pinggy Tunnel
+      - name: Start Pinggy Tunnel
   run: |
     ssh -o StrictHostKeyChecking=no \
         -o ServerAliveInterval=60 \
