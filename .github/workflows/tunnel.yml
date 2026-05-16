@@ -152,16 +152,20 @@ jobs:
           sleep 5
           netstat -tulpn | grep 8080
 
-      - name: Install Cloudflared
+      - name: Install OpenSSH client
         run: |
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
-          chmod +x cloudflared
+          sudo apt update
+          sudo apt install -y openssh-client
 
-      - name: Start Tunnel
+      - name: Start Pinggy Tunnel
         run: |
-          nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
-          sleep 10
-          cat tunnel.log
+           ssh -o StrictHostKeyChecking=no \
+           -o ServerAliveInterval=60 \
+           -R 0:localhost:8080 \
+           a.pinggy.io > tunnel.log 2>&1 &
+        sleep 10
+        cat tunnel.log
+
 
       - name: Commit and Push file
         run: |
