@@ -6,6 +6,5 @@ edition = "2021"
 [dependencies]
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["stream","socks","rustls-tls","http2","gzip","brotli","deflate"] }
+reqwest = { version = "0.12", features = ["stream","socks","rustls-tls","gzip","brotli","deflate"] }
 futures = "0.3"
-tower = "0.4"
