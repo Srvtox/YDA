@@ -90,13 +90,8 @@ jobs:
 
       - name: Start Cloudflare Tunnel
         run: |
-          nohup cloudflared tunnel --url http://localhost:8080 --no-autoupdate > tunnel.log 2>&1 &
+          nohup cloudflared tunnel --url http://localhost:8080 --no-autoupdate > tunnel.txt 2>&1 &
           sleep 15
-          cat tunnel.log
-
-      - name: Extract Tunnel URL
-        run: |
-          grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1 > tunnel_url.txt
           cat tunnel.txt
       
       - name: push name
