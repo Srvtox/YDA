@@ -8,23 +8,19 @@ use axum::{
 
 use reqwest::Client;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use tokio::net::TcpListener;
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() {
 
-    let app = Router::new()
-        .route("/", get(proxy));
+    let app = Router::new().route("/", get(proxy));
 
-    let addr = SocketAddr::from(([0,0,0,0],8080));
+    let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
 
-    println!("Rust WARP proxy running {}", addr);
+    println!("Rust WARP proxy running on 0.0.0.0:8080");
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 async fn proxy(
@@ -42,7 +38,6 @@ async fn proxy(
     };
 
     let client = Client::builder()
-        .http2_prior_knowledge()
         .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:1080").unwrap())
         .build()
         .unwrap();
@@ -59,13 +54,12 @@ async fn proxy(
 
     let status = resp.status();
 
-    let stream = resp.bytes_stream()
-        .map(|item| {
-            item.map_err(|_| std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "stream error"
-            ))
-        });
+    let stream = resp.bytes_stream().map(|item| {
+        item.map_err(|_| std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "stream error"
+        ))
+    });
 
     let body = Body::from_stream(stream);
 
