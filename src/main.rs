@@ -1,17 +1,17 @@
 use axum::{
     Router,
-    routing::get,
-    extract::{Query, State},
+    routing::{get, post},
+    extract::{Path, State},
     response::Response,
     body::Body,
-    http::{HeaderMap, HeaderName, HeaderValue},
+    http::{HeaderMap, Method},
 };
 
 use reqwest::Client;
-use std::collections::HashMap;
 use tokio::net::TcpListener;
 use futures::StreamExt;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Clone)]
 struct AppState {
@@ -23,47 +23,71 @@ async fn main() {
 
     let client = Client::builder()
         .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:1080").unwrap())
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(50)
+        .tcp_keepalive(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(20))
         .http2_prior_knowledge()
         .build()
         .unwrap();
 
-    let state = AppState { client };
+    let state = Arc::new(AppState { client });
 
     let app = Router::new()
-        .route("/", get(proxy))
-        .with_state(Arc::new(state));
+        .route("/*url", get(proxy).post(proxy))
+        .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
 
-    println!("Rust WARP proxy running on 0.0.0.0:8080");
+    println!("Ultra Fast Rust Proxy running on 0.0.0.0:8080");
 
     axum::serve(listener, app).await.unwrap();
 }
 
 async fn proxy(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<HashMap<String,String>>,
-    headers: HeaderMap
+    Path(url): Path<String>,
+    method: Method,
+    headers: HeaderMap,
+    body: Body
 ) -> Response {
 
-    let url = match params.get("url") {
-        Some(u) => u.clone(),
-        None => {
-            return Response::builder()
-                .status(400)
-                .body(Body::from("missing url"))
-                .unwrap();
+    let target = url;
+
+    let mut req = state.client.request(method, &target);
+
+    // forward headers
+    for (name, value) in headers.iter() {
+
+        if name == "host"
+        || name == "connection"
+        || name == "content-length"
+        {
+            continue;
         }
+
+        req = req.header(name, value);
+    }
+
+    // spoof headers اگر نبود
+    if !headers.contains_key("user-agent") {
+        req = req.header(
+            "user-agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+        );
+    }
+
+    if !headers.contains_key("accept") {
+        req = req.header("*/*");
+    }
+
+    // forward body (برای POST)
+    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(b) => b,
+        Err(_) => Default::default()
     };
 
-    let mut req = state.client.get(&url);
-
-    // pass headers from client
-    for (name, value) in headers.iter() {
-        if let Some(name) = name {
-            req = req.header(name, value);
-        }
-    }
+    req = req.body(body_bytes);
 
     let resp = match req.send().await {
         Ok(r) => r,
@@ -79,13 +103,19 @@ async fn proxy(
 
     let mut builder = Response::builder().status(status);
 
-    // copy response headers
+    // forward response headers
     for (name, value) in resp.headers() {
-        if name != "transfer-encoding" {
-            builder = builder.header(name, value);
+
+        if name == "transfer-encoding"
+        || name == "connection"
+        {
+            continue;
         }
+
+        builder = builder.header(name, value);
     }
 
+    // streaming body
     let stream = resp.bytes_stream().map(|item| {
         item.map_err(|_| std::io::Error::new(
             std::io::ErrorKind::Other,
