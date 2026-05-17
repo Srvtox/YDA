@@ -1,9 +1,9 @@
 use axum::{
     Router,
-    routing::{get, post},
+    routing::any,
     extract::{Path, State},
     response::Response,
-    body::Body,
+    body::{Body, to_bytes},
     http::{HeaderMap, Method},
 };
 
@@ -27,19 +27,18 @@ async fn main() {
         .pool_max_idle_per_host(50)
         .tcp_keepalive(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(20))
-        .http2_prior_knowledge()
         .build()
         .unwrap();
 
     let state = Arc::new(AppState { client });
 
     let app = Router::new()
-        .route("/*url", get(proxy).post(proxy))
+        .route("/*url", any(proxy))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
 
-    println!("Ultra Fast Rust Proxy running on 0.0.0.0:8080");
+    println!("Rust proxy running on 8080");
 
     axum::serve(listener, app).await.unwrap();
 }
@@ -60,8 +59,8 @@ async fn proxy(
     for (name, value) in headers.iter() {
 
         if name == "host"
-        || name == "connection"
-        || name == "content-length"
+            || name == "connection"
+            || name == "content-length"
         {
             continue;
         }
@@ -69,20 +68,20 @@ async fn proxy(
         req = req.header(name, value);
     }
 
-    // spoof headers اگر نبود
+    // spoof headers
     if !headers.contains_key("user-agent") {
         req = req.header(
             "user-agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         );
     }
 
     if !headers.contains_key("accept") {
-        req = req.header("*/*");
+        req = req.header("accept", "*/*");
     }
 
-    // forward body (برای POST)
-    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+    // body forward
+    let body_bytes = match to_bytes(body, 1024 * 1024 * 50).await {
         Ok(b) => b,
         Err(_) => Default::default()
     };
@@ -94,7 +93,7 @@ async fn proxy(
         Err(e) => {
             return Response::builder()
                 .status(500)
-                .body(Body::from(format!("proxy error {}", e)))
+                .body(Body::from(format!("proxy error: {}", e)))
                 .unwrap();
         }
     };
@@ -103,11 +102,11 @@ async fn proxy(
 
     let mut builder = Response::builder().status(status);
 
-    // forward response headers
+    // response headers
     for (name, value) in resp.headers() {
 
         if name == "transfer-encoding"
-        || name == "connection"
+            || name == "connection"
         {
             continue;
         }
@@ -115,9 +114,9 @@ async fn proxy(
         builder = builder.header(name, value);
     }
 
-    // streaming body
-    let stream = resp.bytes_stream().map(|item| {
-        item.map_err(|_| std::io::Error::new(
+    // streaming
+    let stream = resp.bytes_stream().map(|chunk| {
+        chunk.map_err(|_| std::io::Error::new(
             std::io::ErrorKind::Other,
             "stream error"
         ))
