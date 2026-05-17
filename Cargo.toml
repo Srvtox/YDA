@@ -1,0 +1,12 @@
+[package]
+name = "warp-proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+reqwest = { version = "0.12", features = ["stream","socks","http2","rustls-tls"] }
+bytes = "1"
+futures = "0.3"
+tower = "0.4"
