@@ -1,128 +1,132 @@
 use axum::{
+    extract::{Query, State},
+    http::{HeaderMap, HeaderName, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
     Router,
-    routing::any,
-    extract::{Path, State},
-    response::Response,
-    body::{Body, to_bytes},
-    http::{HeaderMap, Method},
 };
-
-use reqwest::Client;
-use tokio::net::TcpListener;
+use base64::{engine::general_purpose, Engine as _};
 use futures::StreamExt;
-use std::sync::Arc;
-use std::time::Duration;
-
-#[derive(Clone)]
-struct AppState {
-    client: Client
-}
+use reqwest::Client;
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 #[tokio::main]
 async fn main() {
-
     let client = Client::builder()
-        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:1080").unwrap())
+        .tcp_nodelay(true)
+        .http2_adaptive_window(true)
         .pool_idle_timeout(Duration::from_secs(90))
-        .pool_max_idle_per_host(50)
-        .tcp_keepalive(Duration::from_secs(60))
-        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(120))
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:1080").unwrap())
         .build()
         .unwrap();
 
-    let state = Arc::new(AppState { client });
-
     let app = Router::new()
-        .route("/*url", any(proxy))
-        .with_state(state);
+        .route("/router", get(router))
+        .with_state(client);
 
-    let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
 
-    println!("Rust proxy running on 8080");
+    println!("🚀 Proxy running on {}", addr);
 
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn proxy(
-    State(state): State<Arc<AppState>>,
-    Path(url): Path<String>,
-    method: Method,
+async fn router(
+    Query(params): Query<HashMap<String, String>>,
+    State(client): State<Client>,
     headers: HeaderMap,
-    body: Body
-) -> Response {
+) -> impl IntoResponse {
+    let target = match params.get("u") {
+        Some(u) => u,
+        None => return StatusCode::BAD_REQUEST.into_response(),
+    };
 
-    let target = url;
+    let mut req = client.get(target);
 
-    let mut req = state.client.request(method, &target);
-
-    // forward headers
-    for (name, value) in headers.iter() {
-
-        if name == "host"
-            || name == "connection"
-            || name == "content-length"
-        {
+    // Forward safe headers
+    for (k, v) in headers.iter() {
+        if should_skip_header(k) {
             continue;
         }
 
-        req = req.header(name, value);
+        if let Ok(val) = v.to_str() {
+            req = req.header(k, val);
+        }
     }
-
-    // spoof headers
-    if !headers.contains_key("user-agent") {
-        req = req.header(
-            "user-agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        );
-    }
-
-    if !headers.contains_key("accept") {
-        req = req.header("accept", "*/*");
-    }
-
-    // body forward
-    let body_bytes = match to_bytes(body, 1024 * 1024 * 50).await {
-        Ok(b) => b,
-        Err(_) => Default::default()
-    };
-
-    req = req.body(body_bytes);
 
     let resp = match req.send().await {
         Ok(r) => r,
-        Err(e) => {
-            return Response::builder()
-                .status(500)
-                .body(Body::from(format!("proxy error: {}", e)))
-                .unwrap();
+        Err(err) => {
+            eprintln!("❌ Upstream error: {}", err);
+            return StatusCode::BAD_GATEWAY.into_response();
         }
     };
 
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if is_video(&content_type) {
+        fast_stream(resp).await
+    } else {
+        slow_sse(resp).await
+    }
+}
+
+fn should_skip_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str().to_ascii_lowercase().as_str(),
+        "host" | "content-length" | "transfer-encoding" | "connection" | "accept-encoding"
+    )
+}
+
+fn is_video(ct: &str) -> bool {
+    ct.contains("video")
+        || ct.contains("mp4")
+        || ct.contains("webm")
+        || ct.contains("mpeg")
+        || ct.contains("ogg")
+}
+
+async fn fast_stream(resp: reqwest::Response) -> Response {
     let status = resp.status();
+    let headers = resp.headers().clone();
+    let stream = resp.bytes_stream();
+    let body = axum::body::Body::from_stream(stream);
 
     let mut builder = Response::builder().status(status);
 
-    // response headers
-    for (name, value) in resp.headers() {
-
-        if name == "transfer-encoding"
-            || name == "connection"
-        {
+    for (k, v) in headers.iter() {
+        if should_skip_header(k) {
             continue;
         }
-
-        builder = builder.header(name, value);
+        builder = builder.header(k, v);
     }
 
-    // streaming
-    let stream = resp.bytes_stream().map(|chunk| {
-        chunk.map_err(|_| std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "stream error"
-        ))
+    builder.body(body).unwrap()
+}
+
+async fn slow_sse(resp: reqwest::Response) -> Response {
+    let status = resp.status();
+    let stream = resp.bytes_stream();
+
+    let mapped = stream.map(|chunk| match chunk {
+        Ok(bytes) => {
+            let encoded = general_purpose::STANDARD.encode(bytes);
+            Ok(format!("data:{}\n\n", encoded))
+        }
+        Err(_) => Ok("event:error\ndata:stream\n\n".to_string()),
     });
 
-    let body = Body::from_stream(stream);
-
-    builder.body(body).unwrap()
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .body(axum::body::Body::from_stream(mapped))
+        .unwrap()
 }
