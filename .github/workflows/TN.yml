@@ -138,9 +138,9 @@ jobs:
 
       - name: Start Tunnel
         run: |
-          nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+          nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.txt 2>&1 &
           sleep 10
-          cat tunnel.log
+          cat tunnel.txt
 
       - name: Save tunnel URL to file
         run: |
