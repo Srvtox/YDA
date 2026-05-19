@@ -142,13 +142,6 @@ jobs:
           sleep 10
           cat tunnel.txt
 
-      - name: Save tunnel URL to file
-        run: |
-          echo "🚀 Tunnel URL:" > tunnel.txt
-          echo "${TUNNEL_URL}" >> tunnel.txt
-          echo "" >> tunnel.txt
-          echo "⌛ Generated at: $(date)" >> tunnel.txt
-
       - name: Commit and Push file
         run: |
           git config user.name "github-actions"
