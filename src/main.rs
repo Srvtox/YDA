@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose, Engine as _};
+use bytes::Bytes;
 use futures::StreamExt;
 use reqwest::Client;
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
@@ -45,7 +46,6 @@ async fn router(
 
     let mut req = client.get(target);
 
-    // Forward safe headers
     for (k, v) in headers.iter() {
         if should_skip_header(k) {
             continue;
@@ -97,6 +97,7 @@ async fn fast_stream(resp: reqwest::Response) -> Response {
     let status = resp.status();
     let headers = resp.headers().clone();
     let stream = resp.bytes_stream();
+
     let body = axum::body::Body::from_stream(stream);
 
     let mut builder = Response::builder().status(status);
@@ -115,12 +116,16 @@ async fn slow_sse(resp: reqwest::Response) -> Response {
     let status = resp.status();
     let stream = resp.bytes_stream();
 
-    let mapped = stream.map(|chunk| match chunk {
-        Ok(bytes) => {
-            let encoded = general_purpose::STANDARD.encode(bytes);
-            Ok(format!("data:{}\n\n", encoded))
-        }
-        Err(_) => Ok("event:error\ndata:stream\n\n".to_string()),
+    let mapped = stream.map(|chunk| {
+        let text = match chunk {
+            Ok(bytes) => {
+                let encoded = general_purpose::STANDARD.encode(bytes);
+                format!("data:{}\n\n", encoded)
+            }
+            Err(_) => "event:error\ndata:stream\n\n".to_string(),
+        };
+
+        Ok::<Bytes, std::io::Error>(Bytes::from(text))
     });
 
     Response::builder()
