@@ -1,0 +1,165 @@
+name: WARP Proxy Tunnel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  warp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install base tools
+        run: |
+          sudo apt update
+          sudo apt install -y curl wget tar python3-pip net-tools
+
+      - name: Install WGCF
+        run: |
+          wget -q https://github.com/ViRb3/wgcf/releases/latest/download/wgcf_2.2.30_linux_amd64 -O wgcf
+          chmod +x wgcf
+          sudo mv wgcf /usr/local/bin/
+          yes | wgcf register
+          wgcf generate
+
+      - name: Install WireProxy
+        run: |
+          wget -q https://github.com/pufferffish/wireproxy/releases/latest/download/wireproxy_linux_amd64.tar.gz
+          tar -xzf wireproxy_linux_amd64.tar.gz
+          chmod +x wireproxy
+          sudo mv wireproxy /usr/local/bin/
+
+      - name: Build WireProxy config
+        run: |
+          mkdir warp
+          PRIVATE=$(grep PrivateKey wgcf-profile.conf | cut -d " " -f3)
+          ADDRESS=$(grep Address wgcf-profile.conf | cut -d " " -f3)
+          DNS=$(grep DNS wgcf-profile.conf | cut -d " " -f3)
+          PUBLIC=$(grep PublicKey wgcf-profile.conf | cut -d " " -f3)
+          ENDPOINT=$(grep Endpoint wgcf-profile.conf | cut -d " " -f3)
+
+          cat > warp/config.ini <<EOF
+          [Interface]
+          PrivateKey = $PRIVATE
+          Address = $ADDRESS
+          DNS = $DNS
+          
+          [Peer]
+          PublicKey = $PUBLIC
+          Endpoint = $ENDPOINT
+          
+          [Socks5]
+          BindAddress = 127.0.0.1:1080
+          EOF
+
+      - name: Start WARP SOCKS5
+        run: |
+          nohup wireproxy -c warp/config.ini > warp.log 2>&1 &
+          sleep 8
+          netstat -tulpn | grep 1080
+
+      - name: Test WARP
+        run: |
+          curl --socks5 127.0.0.1:1080 https://ipinfo.io
+
+      - name: Install Python bridge
+        run: |
+          pip3 install flask requests pysocks
+
+      - name: Create HTTP bridge
+        run: |
+          cat > proxy.py <<'PY'
+          from flask import Flask, request, Response, stream_with_context
+          import requests
+          import urllib3
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+          
+          app = Flask(__name__)
+          SOCKS = "socks5h://127.0.0.1:1080"
+          
+          @app.route("/", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+          def proxy():
+              url = request.args.get("url")
+              if not url:
+                  return "❌ 400، داداش آدرس سایت رو یادت رفت بفرستی!", 400
+              
+              headers = {k: v for k, v in request.headers if k.lower() != 'host'}
+              
+              try:
+                  r = requests.request(
+                      method=request.method,
+                      url=url,
+                      headers=headers,
+                      data=request.get_data(),
+                      cookies=request.cookies,
+                      proxies={"http": SOCKS, "https": SOCKS},
+                      allow_redirects=True,
+                      stream=True,
+                      timeout=20,
+                      verify=False
+                  )
+                  
+                  excluded_headers = ['content-encoding', 'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization']
+                  response_headers = [(k, v) for k, v in r.raw.headers.items() if k.lower() not in excluded_headers]
+                  
+                  def generate():
+                      try:
+                          for chunk in r.iter_content(chunk_size=16384):
+                              if chunk:
+                                  yield chunk
+                      finally:
+                          r.close()
+                          
+                  return Response(stream_with_context(generate()), status=r.status_code, headers=response_headers)
+              except Exception as e:
+                  return f"🔥 انفجار در پروکسی: {str(e)}", 500
+          
+          if __name__ == "__main__":
+              app.run(host="0.0.0.0", port=8080, threaded=True)
+          PY
+
+      - name: Start HTTP bridge
+        run: |
+          nohup python3 proxy.py > proxy.log 2>&1 &
+          sleep 5
+          netstat -tulpn | grep 8080
+
+      - name: Install Cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O cloudflared
+          chmod +x cloudflared
+
+      - name: Start Tunnel
+        run: |
+          nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > tunnel.log 2>&1 &
+          sleep 10
+          cat tunnel.log
+
+      - name: Save tunnel URL to file
+        run: |
+          echo "🚀 Tunnel URL:" > tunnel.txt
+          echo "${TUNNEL_URL}" >> tunnel.txt
+          echo "" >> tunnel.txt
+          echo "⌛ Generated at: $(date)" >> tunnel.txt
+
+      - name: Commit and Push file
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add tunnel.txt
+          git diff --cached --quiet || git commit -m "Update tunnel URL"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Keep runner alive
+        run: |
+          for i in $(seq 1 360); do
+            curl --socks5 127.0.0.1:1080 https://ipinfo.io/ip
+            sleep 60
+          done
